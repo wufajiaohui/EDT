@@ -3,7 +3,8 @@ name: vvhan
 on:
   workflow_dispatch:
   schedule:
-    - cron: '7 * * * *' # 每小時的 07 分自動執行
+    # 每小時的 07 分自動執行
+    - cron: '7 * * * *'
 
 permissions:
   contents: write
@@ -12,10 +13,14 @@ jobs:
   fetch-and-save:
     runs-on: ubuntu-latest
     env:
+      # 強制 Actions 運行在 Node.js 24 環境，適配最新標準
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # 僅抓取最新層級，提升執行效率
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,6 +37,7 @@ jobs:
           import os
           from datetime import datetime, timedelta
 
+          # 1. 獲取北京時間
           bj_time = (datetime.utcnow() + timedelta(hours=8)).strftime('%m-%d %H:%M')
           url = "https://api.4ce.cn/api/bestCFIP"
           dir_name = "vvhan"
@@ -39,12 +45,21 @@ jobs:
 
           def process_v4(file_name):
               ip_nodes = []
+              # 移動 -> 聯通 -> 電信 排序
               order = [("CM", "移動"), ("CU", "聯通"), ("CT", "電信")]
               
               try:
+                  # 增加超時控制，防止 Actions 卡死
                   response = requests.get(url, timeout=15)
+                  if response.status_code != 200:
+                      print(f"API 請求失敗: {response.status_code}")
+                      return
+                      
                   res_json = response.json()
-                  if not res_json.get("success"): return
+                  if not res_json.get("success"):
+                      print("API 返回數據標記為失敗")
+                      return
+
                   v4_data = res_json.get("data", {}).get("v4", {})
                   for key, label in order:
                       nodes = v4_data.get(key, [])
@@ -52,27 +67,39 @@ jobs:
                           ip = node.get("ip")
                           colo = node.get("colo", "Unknown")
                           if ip:
-                              # 符合網頁「整行點擊複製」格式
+                              # 符合網頁「整行點擊複製」格式：IP:443#標籤|機房|IP
                               line = f"{ip}:443#{label}|{colo}|{ip}"
                               ip_nodes.append(line)
-              except: return
+              except Exception as e:
+                  print(f"發生異常: {e}")
+                  return
               
-              if not ip_nodes: return
+              # 安全檢查：如果沒抓到數據，不覆蓋舊文件
+              if not ip_nodes:
+                  print("未抓取到有效 IP 節點")
+                  return
 
               file_path = os.path.join(dir_name, file_name)
               should_write = True
+              
+              # 智能對比：僅在 IP 列表有變動時才寫入
               if os.path.exists(file_path):
                   with open(file_path, "r", encoding="utf-8") as f:
                       old_content = f.readlines()
+                      # 跳過首尾時間行進行核心數據對比
                       old_ips = [l.strip() for l in old_content[1:-1] if l.strip()]
-                      if old_ips == ip_nodes: should_write = False
+                      if old_ips == ip_nodes:
+                          print("內容無變化，跳過更新。")
+                          should_write = False
 
               if should_write:
                   final_output = [f"saas.sin.fan:443#▼ 優選IPv4 | {bj_time} | Cloudflare EDT"]
                   final_output.extend(ip_nodes)
                   final_output.append(f"bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝vvHan")
+                  
                   with open(file_path, "w", encoding="utf-8") as f:
                       f.write("\n".join(final_output))
+                  print(f"成功更新 {len(ip_nodes)} 個節點")
 
           process_v4("ipv4.txt")
           EOF
@@ -82,6 +109,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add vvhan/*.txt
+          # 檢查暫存區是否有實質變動
           if git diff --staged --quiet; then
             echo "無實質內容變動，跳過提交。"
           else
