@@ -1,1 +1,65 @@
+name: vps789
 
+on:
+  workflow_dispatch:
+  schedule:
+    # 每天北京時間 08:18, 14:18, 20:18 執行 (比天誠晚 13 分鐘)
+    - cron: '18 0,6,12 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Process and Compare
+        run: |
+          mkdir -p vps789
+          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          HAS_CHANGES=false
+          TARGET_FILE="vps789/top10.txt"
+          TMP_NEW="top10_new.tmp"
+          TMP_OLD="top10_old.tmp"
+
+          # 1. 直接抓取新的數據源
+          # 抓取 cmliu 的 addressesapi.txt，取前 10 行並格式化
+          curl -s "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt" | \
+          sed '/^$/d' | head -n 10 | sed 's/.*/&:443#推薦 | &/' > "$TMP_NEW"
+
+          # 2. 對比邏輯 (排除首尾時間戳行)
+          should_write=false
+          if [ -f "$TARGET_FILE" ]; then
+            sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+            if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+              should_write=true
+            fi
+          else
+            should_write=true
+          fi
+
+          # 3. 寫入標準格式文件 (供 index.html 提取時間)
+          if [ "$should_write" = true ]; then
+            echo "saas.sin.fan:443#▼ 優選網域 TOP10 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            cat "$TMP_NEW" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選網域 | Cloudflare EDT | 感謝cmliu" >> "$TARGET_FILE"
+            HAS_CHANGES=true
+          fi
+
+          echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
+
+      - name: Commit and Push
+        run: |
+          if [ "${{ env.has_changes }}" = "true" ]; then
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add vps789/*.txt
+            git commit -m "VPS789 (cmliu) Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git pull --rebase origin main
+            git push origin main
+          else
+            echo "數據無變動，跳過提交。"
+          fi
