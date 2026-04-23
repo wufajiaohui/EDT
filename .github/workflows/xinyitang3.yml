@@ -1,1 +1,65 @@
+name: xinyitang3
 
+on:
+  workflow_dispatch:
+  schedule:
+    # 設定為每 35 分鐘執行一次
+    - cron: '*/35 * * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Process Data
+        run: |
+          mkdir -p xinyitang3
+          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          TARGET_FILE="xinyitang3/ipv4.txt"
+          TMP_NEW="new_nodes.tmp"
+          TMP_OLD="old_nodes.tmp"
+          HAS_CHANGES=false
+
+          # 1. 抓取數據並格式化
+          # 來源為 txt 格式，我們取有效行並轉化為「整行點擊複製」格式
+          curl -s "https://raw.githubusercontent.com/xinyitang3/vless/refs/heads/main/sub/Cf-ipv4.txt" | \
+          sed '/^$/d' | sed 's/.*/&:443#常用 | &/' > "$TMP_NEW"
+
+          # 2. 對比邏輯 (排除首尾廣告/時間行)
+          should_write=false
+          if [ -f "$TARGET_FILE" ]; then
+            sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+            if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+              should_write=true
+            fi
+          else
+            should_write=true
+          fi
+
+          # 3. 寫入文件 (標準頭部供 index.html 提取時間)
+          if [ "$should_write" = true ]; then
+            echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            cat "$TMP_NEW" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
+            HAS_CHANGES=true
+          fi
+
+          echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
+
+      - name: Commit and Push
+        run: |
+          if [ "${{ env.has_changes }}" = "true" ]; then
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add xinyitang3/*.txt
+            git commit -m "Xinyitang3 Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git pull --rebase origin main
+            git push origin main
+          else
+            echo "數據內容無變動，跳過提交。"
+          fi
