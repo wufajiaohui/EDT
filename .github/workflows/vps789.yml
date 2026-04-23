@@ -13,37 +13,50 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # 強制 Actions 運行在 Node.js 24 環境，適配 2026 年 GitHub 新標準
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # 僅抓取最新層級，提升執行效率
+          fetch-depth: 1
 
       - name: Process and Compare
         run: |
           mkdir -p vps789
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
-          HAS_CHANGES=false
           TARGET_FILE="vps789/top10.txt"
           TMP_NEW="top10_new.tmp"
           TMP_OLD="top10_old.tmp"
+          HAS_CHANGES=false
 
-          # 1. 直接抓取新的數據源
-          # 抓取 cmliu 的 addressesapi.txt，取前 10 行並格式化
-          curl -s "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt" | \
-          sed '/^$/d' | head -n 10 | sed 's/.*/&:443#推薦 | &/' > "$TMP_NEW"
+          # 1. 抓取數據並進行安全預檢
+          RAW_CONTENT=$(curl -sSL --connect-timeout 10 "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt")
 
-          # 2. 對比邏輯 (排除首尾時間戳行)
-          should_write=false
-          if [ -f "$TARGET_FILE" ]; then
-            sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
-            if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
-              should_write=true
-            fi
-          else
-            should_write=true
+          # 【安全檢查】防範 404 或空數據覆蓋原有文件
+          if [[ "$RAW_CONTENT" == *"404"* ]] || [[ ${#RAW_CONTENT} -lt 20 ]]; then
+            echo "警告：cmliu 數據源抓取異常 (404 或長度不足)，跳過本次處理。"
+            exit 0
           fi
 
-          # 3. 寫入標準格式文件 (供 index.html 提取時間)
+          # 2. 處理數據：過濾空行、取前 10 行、格式化為「整行點擊複製」格式
+          echo "$RAW_CONTENT" | sed '/^$/d' | head -n 10 | sed 's/.*/&:443#推薦 | &/' > "$TMP_NEW"
+
+          # 3. 對比邏輯 (排除首尾動態行)
+          should_write=false
+          if [ -s "$TMP_NEW" ]; then
+            if [ -f "$TARGET_FILE" ]; then
+              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+                should_write=true
+              fi
+            else
+              should_write=true
+            fi
+          fi
+
+          # 4. 寫入文件 (標準化格式供網頁提取時間)
           if [ "$should_write" = true ]; then
             echo "saas.sin.fan:443#▼ 優選網域 TOP10 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
@@ -63,5 +76,5 @@ jobs:
             git pull --rebase origin main
             git push origin main
           else
-            echo "數據無變動，跳過提交。"
+            echo "數據無實質變動或抓取失敗，跳過提交。"
           fi
