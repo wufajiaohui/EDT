@@ -12,10 +12,14 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
+      # 強制使用 Node.js 24 運行 Actions，確保長久穩定並減少警告
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # 僅抓取最新歷史，加速啟動
+          fetch-depth: 1
 
       - name: Fetch and Process Data
         run: |
@@ -30,8 +34,17 @@ jobs:
             local tmp_new="new_nodes_$type.tmp"
             local tmp_old="old_nodes_$type.tmp"
             
-            # 使用 jq 處理數據並轉換運營商名稱
-            curl -s "$url" | jq -r --arg type "$type" '
+            # 1. 抓取原始數據到臨時變量進行檢查
+            RAW_JSON=$(curl -sSL --connect-timeout 10 "$url")
+
+            # 【安全檢查】防止 404 或數據源失效覆蓋舊文件
+            if [[ "$RAW_JSON" == *"404"* ]] || [[ ${#RAW_JSON} -lt 50 ]]; then
+              echo "警告：IPv$type 數據源抓取異常，跳過本次處理以保護原始數據。"
+              return
+            fi
+            
+            # 2. 使用 jq 處理數據並轉換運營商名稱
+            echo "$RAW_JSON" | jq -r --arg type "$type" '
               .[] | 
               (if .line == "CM" then "移動" 
                elif .line == "CU" then "聯通" 
@@ -40,7 +53,7 @@ jobs:
                "\(.ip):443#\($label) | \(.colo) | \(.latency)ms | \(.speed)mbps"
             ' > "$tmp_new"
 
-            # 對比邏輯
+            # 3. 對比邏輯 (排除首尾動態行)
             local should_write=false
             if [ -f "$target_file" ]; then
               sed '1d;$d' "$target_file" > "$tmp_old"
@@ -51,6 +64,7 @@ jobs:
               should_write=true
             fi
 
+            # 4. 寫入文件 (標準頭部供網頁提取時間)
             if [ "$should_write" = true ]; then
               echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$target_file"
               cat "$tmp_new" >> "$target_file"
@@ -73,5 +87,5 @@ jobs:
             git pull --rebase origin main
             git push origin main
           else
-            echo "內容無實質變化，跳過提交。"
+            echo "內容無實質變化或抓取失敗，跳過提交。"
           fi
