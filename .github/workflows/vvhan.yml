@@ -1,1 +1,89 @@
+name: vvhan
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7 * * * *' # 每小時的 07 分自動執行
+
+permissions:
+  contents: write
+
+jobs:
+  fetch-and-save:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests
+
+      - name: Process API Data
+        run: |
+          python << 'EOF'
+          import requests
+          import os
+          from datetime import datetime, timedelta
+
+          bj_time = (datetime.utcnow() + timedelta(hours=8)).strftime('%m-%d %H:%M')
+          url = "https://api.4ce.cn/api/bestCFIP"
+          dir_name = "vvhan"
+          os.makedirs(dir_name, exist_ok=True)
+
+          def process_v4(file_name):
+              ip_nodes = []
+              order = [("CM", "移動"), ("CU", "聯通"), ("CT", "電信")]
+              
+              try:
+                  response = requests.get(url, timeout=15)
+                  res_json = response.json()
+                  if not res_json.get("success"): return
+                  v4_data = res_json.get("data", {}).get("v4", {})
+                  for key, label in order:
+                      nodes = v4_data.get(key, [])
+                      for node in nodes:
+                          ip = node.get("ip")
+                          colo = node.get("colo", "Unknown")
+                          if ip:
+                              # 符合網頁「整行點擊複製」格式
+                              line = f"{ip}:443#{label}|{colo}|{ip}"
+                              ip_nodes.append(line)
+              except: return
+              
+              if not ip_nodes: return
+
+              file_path = os.path.join(dir_name, file_name)
+              should_write = True
+              if os.path.exists(file_path):
+                  with open(file_path, "r", encoding="utf-8") as f:
+                      old_content = f.readlines()
+                      old_ips = [l.strip() for l in old_content[1:-1] if l.strip()]
+                      if old_ips == ip_nodes: should_write = False
+
+              if should_write:
+                  final_output = [f"saas.sin.fan:443#▼ 優選IPv4 | {bj_time} | Cloudflare EDT"]
+                  final_output.extend(ip_nodes)
+                  final_output.append(f"bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝vvHan")
+                  with open(file_path, "w", encoding="utf-8") as f:
+                      f.write("\n".join(final_output))
+
+          process_v4("ipv4.txt")
+          EOF
+
+      - name: Commit and Push
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add vvhan/*.txt
+          if git diff --staged --quiet; then
+            echo "無實質內容變動，跳過提交。"
+          else
+            git commit -m "vvHan Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git pull --rebase origin main
+            git push origin main
+          fi
