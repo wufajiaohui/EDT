@@ -3,7 +3,7 @@ name: tiancheng
 on:
   workflow_dispatch:
   schedule:
-    # 設置在每天北京時間 08:05, 14:05, 20:05 執行 (UTC 00:05, 06:05, 12:05)
+    # 每天北京時間 08:05, 14:05, 20:05 執行 (UTC 00:05, 06:05, 12:05)
     - cron: '5 0,6,12 * * *'
 
 permissions:
@@ -13,58 +13,68 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
+      # 強制使用 Node.js 24 運行 Actions，確保長久穩定
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # 僅抓取最新歷史，加速啟動
+          fetch-depth: 1
 
       - name: Process and Compare
         run: |
           mkdir -p tiancheng
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
-          HAS_CHANGES=false
           TARGET_FILE="tiancheng/all.txt"
           TMP_NEW="new_nodes.tmp"
           TMP_OLD="old_nodes.tmp"
+          HAS_CHANGES=false
 
-          # 1. 抓取數據並解碼 (Base64 -> 原文)
-          # 使用 curl 抓取並透過 base64 -d 解碼
-          RAW_DATA=$(curl -s "https://cm.soso.edu.kg/sub?host=123&uuid=456" | base64 -d 2>/dev/null)
+          # 1. 抓取數據並初步檢查 (增加超時控制)
+          RAW_BASE64=$(curl -sSL --connect-timeout 10 "https://cm.soso.edu.kg/sub?host=123&uuid=456")
 
-          if [ -z "$RAW_DATA" ]; then
-            echo "錯誤：未能獲取數據或解碼失敗。"
+          # 【安全檢查】防範 404 或失效源覆蓋原有文件
+          if [[ "$RAW_BASE64" == *"404"* ]] || [[ ${#RAW_BASE64} -lt 20 ]]; then
+            echo "警告：數據源抓取異常，跳過本次處理以保護原始數據。"
             exit 0
           fi
 
-          # 2. 解析節點並格式化
-          # 提取 @ 之後的 IP:端口，並根據關鍵字標註地區
-          echo "$RAW_DATA" | while IFS= read -r line; do
-            if [[ -z "$line" ]]; then continue; fi
-            
-            # 提取 host:port
-            hp=$(echo "$line" | grep -oP '(?<=@).*?(?=\?)')
-            
-            # 地區識別邏輯
-            if [[ "$line" =~ "HKG" || "$line" =~ "HK" ]]; then loc="香港 HK"
-            elif [[ "$line" =~ "SIN" || "$line" =~ "SG" ]]; then loc="新加坡 SG"
-            elif [[ "$line" =~ "JPN" || "$line" =~ "JP" ]]; then loc="日本 JP"
-            elif [[ "$line" =~ "USA" || "$line" =~ "US" ]]; then loc="美國 US"
-            else loc="其它 OT"; fi
+          # 2. 解碼並解析格式化
+          RAW_DATA=$(echo "$RAW_BASE64" | base64 -d 2>/dev/null)
+          
+          if [ -n "$RAW_DATA" ]; then
+            echo "$RAW_DATA" | while IFS= read -r line; do
+              if [[ -z "$line" ]]; then continue; fi
+              
+              # 提取 host:port (適配 vless/vmess 等節點格式)
+              hp=$(echo "$line" | grep -oP '(?<=@).*?(?=\?)' || echo "")
+              
+              if [[ -n "$hp" ]]; then
+                # 地區識別邏輯
+                if [[ "$line" =~ "HK" ]]; then loc="香港 HK"
+                elif [[ "$line" =~ "SG" ]]; then loc="新加坡 SG"
+                elif [[ "$line" =~ "JP" ]]; then loc="日本 JP"
+                elif [[ "$line" =~ "US" ]]; then loc="美國 US"
+                else loc="其它 OT"; fi
+                
+                # 輸出為標準「整行點擊複製」格式
+                echo "${hp}#${loc} | ${hp}" >> "$TMP_NEW"
+              fi
+            done
+          fi
 
-            if [[ -n "$hp" ]]; then
-              echo "${hp}#${loc} | ${hp}" >> "$TMP_NEW"
-            fi
-          done
-
-          # 3. 對比邏輯 (排除首尾廣告行)
+          # 3. 對比邏輯 (排除首尾動態行)
           should_write=false
-          if [ -f "$TARGET_FILE" ]; then
-            sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
-            if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+          if [ -s "$TMP_NEW" ]; then
+            if [ -f "$TARGET_FILE" ]; then
+              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+                should_write=true
+              fi
+            else
               should_write=true
             fi
-          else
-            should_write=true
           fi
 
           # 4. 寫入文件 (標準化格式)
@@ -72,9 +82,6 @@ jobs:
             echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
             echo "bestcf.030101.xyz:443#▲ 優選IP | Cloudflare EDT | 感謝天誠" >> "$TARGET_FILE"
-            
-            # 如果需要保留 mini.txt (每組取前3個)，可以在此處加入額外邏輯
-            # 這裡為了框架簡潔，僅處理全量版 all.txt
             HAS_CHANGES=true
           fi
 
@@ -90,5 +97,5 @@ jobs:
             git pull --rebase origin main
             git push origin main
           else
-            echo "內容無實質變化，跳過提交。"
+            echo "數據無變動或抓取失敗，跳過提交。"
           fi
