@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloudflare EDT - 專業優選導覽</title>
+    <style>
+        :root {
+            --primary: #0070f3;
+            --primary-hover: #0051ad;
+            --success: #10b981;
+            --bg: #f8fafc;
+            --card-bg: rgba(255, 255, 255, 0.98);
+            --text-main: #1e293b;
+            --text-sub: #64748b;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            background: var(--bg);
+            background-image: radial-gradient(#e2e8f0 1px, transparent 1px);
+            background-size: 24px 24px;
+            margin: 0; padding: 20px; color: var(--text-main);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container { max-width: 1100px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 50px; padding: 40px 0; }
+        h1 { font-size: 2.5rem; font-weight: 800; margin: 0 0 12px; letter-spacing: -1px; }
+        .subtitle { color: var(--text-sub); font-size: 1.1rem; }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 24px; }
+
+        .card {
+            background: var(--card-bg);
+            border: 1px solid rgba(226, 232, 240, 0.8);
+            border-radius: 20px; padding: 24px; display: flex; flex-direction: column;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .card:hover { transform: translateY(-6px); box-shadow: 0 20px 40px -10px rgba(0, 112, 243, 0.15); border-color: var(--primary); }
+
+        .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+        .card-title { font-weight: 800; font-size: 1.25rem; color: #0f172a; }
+        .tag { font-size: 0.75rem; background: #eff6ff; color: var(--primary); padding: 4px 12px; border-radius: 99px; font-weight: 600; }
+        
+        /* 描述文字樣式 */
+        .card-desc { font-size: 0.9rem; color: var(--text-sub); line-height: 1.5; }
+        /* 新增：動態時間文字樣式 */
+        .update-stamp { font-size: 0.8rem; color: #ef4444; font-weight: 500; margin: 8px 0; display: block; }
+        
+        .online-count { display: inline-flex; align-items: center; gap: 6px; color: var(--success); font-weight: 700; font-size: 0.85rem; }
+        .online-count::before { content: ''; width: 8px; height: 8px; background: var(--success); border-radius: 50%; box-shadow: 0 0 8px var(--success); }
+
+        .btn-group { display: grid; grid-template-columns: 1.2fr 1fr; gap: 12px; margin-top: 24px; }
+        .btn { display: inline-flex; align-items: center; justify-content: center; padding: 12px; border-radius: 12px; font-size: 0.9rem; font-weight: 700; cursor: pointer; border: none; transition: all 0.2s; }
+        .btn-main { background: var(--primary); color: white; }
+        .btn-sub { background: #f1f5f9; color: #475569; }
+
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.6); display: none; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(8px); }
+        .modal-content { background: #fff; width: 92%; max-width: 750px; max-height: 85vh; border-radius: 24px; padding: 32px; position: relative; display: flex; flex-direction: column; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        
+        .node-list { background: #f8fafc; border-radius: 16px; overflow-y: auto; border: 1px solid #e2e8f0; flex: 1; padding: 8px; scrollbar-width: none; }
+        .node-list::-webkit-scrollbar { display: none; }
+
+        .node-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 14px 18px; border-radius: 12px; transition: all 0.2s;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.5);
+            cursor: pointer;
+        }
+        .node-item:not(.no-click):hover { background: #fff; box-shadow: 0 4px 15px rgba(0,0,0,0.06); transform: scale(1.01); }
+        .node-item:not(.no-click):active { transform: scale(0.98); background: #f1f5f9; }
+
+        .node-text { font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #334155; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .copy-badge { background: var(--primary); color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 700; opacity: 0; transition: all 0.2s; }
+        .node-item:hover .copy-badge { opacity: 1; }
+        .no-click { cursor: default; }
+
+        .modal-footer { margin-top: 24px; display: flex; gap: 12px; }
+        .copy-all-btn { background: var(--success); color: white; flex: 2; }
+        .close-btn { background: #f1f5f9; color: #64748b; flex: 1; }
+
+        .toast { position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%); background: #1e293b; color: #fff; padding: 12px 24px; border-radius: 12px; font-size: 14px; font-weight: 600; z-index: 2000; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); animation: slideUp 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28); }
+        @keyframes slideUp { from { bottom: 0; opacity: 0; } to { bottom: 32px; opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Cloudflare EDT</h1>
+        <p class="subtitle">自動化優選數據 · 點擊整行即可複製</p>
+    </header>
+    <div id="cards-container" class="card-grid"></div>
+</div>
+
+<div id="modalOverlay" class="modal-overlay">
+    <div class="modal-content" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h3 id="modalTitle">節點預覽</h3>
+        </div>
+        <div id="modalBody" class="node-list"></div>
+        <div class="modal-footer">
+            <button class="btn copy-all-btn" id="copyAllBtn">複製全部內容</button>
+            <button class="btn close-btn" onclick="closeModal()">關閉</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const sources = [
+        { name: 'NiREvil IPv4', path: 'nirevil/ipv4.txt', tag: '穩定', desc: '每天下午更新' },
+        { name: 'IP 多地區完整版', path: 'tiancheng/all.txt', tag: '推薦', desc: '天誠 (早中晚高頻更新)' },
+        { name: 'TOP 10 網域', path: 'vps789/top10.txt', tag: '穩定', desc: 'CM123 (每半天動態更新)' },
+        { name: '網域全量版', path: 'domain/all.txt', tag: '推薦', desc: '精選合集 (每月更新)' },
+        { name: 'vvHan IPv4', path: 'vvhan/ipv4.txt', tag: '推薦', desc: 'vvHan (每小時更新)' },
+        { name: 'Xinyitang3 IPv4', path: 'xinyitang3/ipv4.txt', tag: 'NEW', desc: 'Xinyitang3 (每半小時更新)' }
+    ];
+
+    async function init() {
+        const container = document.getElementById('cards-container');
+        container.innerHTML = ''; 
+        for (const s of sources) {
+            const card = document.createElement('div');
+            card.className = 'card';
+            let onlineCount = 0;
+            let fileTimeStr = "正在獲取更新時間...";
+            
+            try {
+                const resp = await fetch(s.path + '?t=' + Date.now());
+                if (resp.ok) {
+                    const txt = await resp.text();
+                    const lines = txt.split('\n').filter(l => l.trim() !== '');
+                    // 獲取第一行並提取時間部分
+                    // 格式：saas.sin.fan:443#▼ 优选IPv4 | 04-19 21:22 | YouTube@真香定律
+                    const firstLine = lines[0] || "";
+                    fileTimeStr = firstLine.split('|')[1] ? firstLine.split('|')[1].trim() : "格式不正確";
+                    onlineCount = lines.length > 2 ? lines.length - 2 : 0; 
+                }
+            } catch(e) { 
+                fileTimeStr = "讀取失敗";
+                onlineCount = 0; 
+            }
+
+            card.innerHTML = `
+                <div class="card-header">
+                    <div class="card-title">${s.name}</div>
+                    <span class="tag">${s.tag}</span>
+                </div>
+                <div class="card-desc">${s.desc}</div>
+                <div class="update-stamp">🕒 更新時間: ${fileTimeStr}</div>
+                <div class="online-count">在線節點: ${onlineCount}</div>
+                <div class="btn-group">
+                    <button class="btn btn-main" onclick="openModal('${s.name}', '${s.path}')">預覽列表</button>
+                    <button class="btn btn-sub" onclick="copyFirstIP('${s.path}')">首個 IP</button>
+                </div>
+            `;
+            container.appendChild(card);
+        }
+    }
+
+    async function copyFirstIP(path) {
+        try {
+            const resp = await fetch(path + '?t=' + Date.now());
+            const txt = await resp.text();
+            const lines = txt.split('\n').filter(l => l.trim() !== '');
+            if (lines.length > 1) {
+                const first = lines[1].split('#')[0].trim();
+                await navigator.clipboard.writeText(first);
+                showToast('🚀 首個 IP 已複製');
+            }
+        } catch (e) { showToast('❌ 獲取失敗'); }
+    }
+
+    async function openModal(name, path) {
+        const overlay = document.getElementById('modalOverlay');
+        const body = document.getElementById('modalBody');
+        const copyAllBtn = document.getElementById('copyAllBtn');
+        document.getElementById('modalTitle').innerText = name;
+        body.innerHTML = '<div style="padding:40px; text-align:center;">同步中...</div>';
+        overlay.style.display = 'flex';
+
+        try {
+            const response = await fetch(path + '?t=' + Date.now());
+            const text = await response.text();
+            const lines = text.split('\n').filter(l => l.trim() !== '');
+            body.innerHTML = '';
+            lines.forEach((line, index) => {
+                const isAds = index === 0 || index === lines.length - 1;
+                const item = document.createElement('div');
+                item.className = 'node-item' + (isAds ? ' no-click' : '');
+                
+                const copyText = line.split('#')[0];
+                if (!isAds) {
+                    item.onclick = () => { navigator.clipboard.writeText(copyText); showToast('✅ IP 已複製'); };
+                }
+
+                item.innerHTML = `
+                    <div class="node-text">${line}</div>
+                    ${!isAds ? `<span class="copy-badge">複製</span>` : ''}
+                `;
+                body.appendChild(item);
+            });
+            copyAllBtn.onclick = () => { navigator.clipboard.writeText(text); showToast('📋 全部內容已複製'); };
+        } catch (e) { body.innerHTML = '<div style="padding:40px; text-align:center; color:red;">加載失敗</div>'; }
+    }
+
+    function showToast(msg) {
+        const t = document.createElement('div');
+        t.className = 'toast';
+        t.innerText = msg;
+        document.body.appendChild(t);
+        setTimeout(() => { t.style.opacity = '0'; setTimeout(() => document.body.removeChild(t), 300); }, 1500);
+    }
+
+    function closeModal() { document.getElementById('modalOverlay').style.display = 'none'; }
+    document.getElementById('modalOverlay').onclick = closeModal;
+    init();
+</script>
+</body>
+</html>
