@@ -3,7 +3,6 @@ name: xinyitang3
 on:
   workflow_dispatch:
   schedule:
-    # 每 35 分鐘執行一次
     - cron: '*/35 * * * *'
 
 permissions:
@@ -12,63 +11,49 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-latest
-    env:
-      # 強制 Actions 運行在 Node.js 24 環境，消除 2026 年前的過時警告
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    # 移除 FORCE 變量，改用 GitHub 默認的最速路徑
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4.2.2
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # 關閉不必要的 git 歷史抓取，加速運行
+          fetch-depth: 1
 
-      - name: Process Data
+      - name: Process
         run: |
           mkdir -p xinyitang3
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
-          TARGET_FILE="xinyitang3/ipv4.txt"
-          TMP_NEW="new_nodes.tmp"
-          TMP_OLD="old_nodes.tmp"
-          HAS_CHANGES=false
+          TARGET="xinyitang3/ipv4.txt"
+          
+          # 1. 直接抓取
+          RAW=$(curl -sSL --connect-timeout 5 "https://raw.githubusercontent.com/xinyitang3/vless/refs/heads/main/sub/Cf-ipv4.txt")
 
-          # 1. 抓取原始數據到變數 (預檢機制)
-          RAW_CONTENT=$(curl -s "https://raw.githubusercontent.com/xinyitang3/vless/refs/heads/main/sub/Cf-ipv4.txt")
-
-          # 【安全過濾】防範 404 或空數據覆蓋原有文件
-          if [[ "$RAW_CONTENT" == *"404"* ]] || [[ ${#RAW_CONTENT} -lt 10 ]]; then
-            echo "警告：抓取內容異常 (404 或數據過短)。為保護原文件，本次更新已安全終止。"
+          # 2. 安全檢查 (防止 404 或空數據)
+          if [[ "$RAW" == *"404"* ]] || [[ ${#RAW} -lt 10 ]]; then
+            echo "抓取異常，跳過。"
             exit 0
           fi
 
-          # 2. 格式化數據 (轉換為：域名/IP:443#標籤 | 原始值)
-          echo "$RAW_CONTENT" | sed '/^$/d' | sed 's/.*/&:443#常用 | &/' > "$TMP_NEW"
-
-          # 3. 內容對比 (排除首尾動態時間行，僅對比核心 IP)
-          if [ -f "$TARGET_FILE" ]; then
-            sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
-            if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
-              # 發現實質內容變化
-              echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
-              cat "$TMP_NEW" >> "$TARGET_FILE"
-              echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
-              HAS_CHANGES=true
+          # 3. 處理數據
+          NEW_DATA=$(echo "$RAW" | sed '/^$/d' | sed 's/.*/&:443#常用 | &/')
+          
+          # 4. 對比與寫入
+          if [ -f "$TARGET" ]; then
+            OLD_DATA=$(sed '1d;$d' "$TARGET")
+            if [ "$OLD_DATA" == "$NEW_DATA" ]; then
+              echo "數據未變動。"
+              exit 0
             fi
-          else
-            # 初次創建文件
-            echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
-            cat "$TMP_NEW" >> "$TARGET_FILE"
-            echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
-            HAS_CHANGES=true
           fi
 
-          echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
+          # 5. 生成最終文件
+          echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET"
+          echo "$NEW_DATA" >> "$TARGET"
+          echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET"
 
-      - name: Commit and Push
-        run: |
-          if [ "${{ env.has_changes }}" = "true" ]; then
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "github-actions[bot]"
-            git add xinyitang3/*.txt
-            git commit -m "Xinyitang3 Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
-            git pull --rebase origin main
-            git push origin main
-          else
-            echo "數據無變動或抓取失敗，跳過 Git 提交。"
-          fi
+          # 6. 提交變更
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add "$TARGET"
+          git commit -m "Update $BJ_TIME"
+          git push origin main
