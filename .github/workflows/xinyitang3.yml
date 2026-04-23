@@ -16,7 +16,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       - name: Process Data
         run: |
@@ -27,15 +27,26 @@ jobs:
           TMP_OLD="old_nodes.tmp"
           HAS_CHANGES=false
 
-          # 1. 抓取數據並格式化
-          # 來源為 txt 格式，我們取有效行並轉化為「整行點擊複製」格式
-          curl -s "https://raw.githubusercontent.com/xinyitang3/vless/refs/heads/main/sub/Cf-ipv4.txt" | \
-          sed '/^$/d' | sed 's/.*/&:443#常用 | &/' > "$TMP_NEW"
+          # 1. 抓取原始數據到變數進行檢查
+          RAW_CONTENT=$(curl -s "https://raw.githubusercontent.com/xinyitang3/vless/refs/heads/main/sub/Cf-ipv4.txt")
 
-          # 2. 對比邏輯 (排除首尾廣告/時間行)
+          # 【安全檢查機制】
+          # 如果抓取內容包含 "404" 或者長度小於 10 個字元（空內容或錯誤訊息），則終止流程
+          if [[ "$RAW_CONTENT" == *"404"* ]] || [[ ${#RAW_CONTENT} -lt 10 ]]; then
+            echo "警告：抓取失敗 (404 或數據為空)，為保護原始文件，本次更新已跳過。"
+            echo "has_changes=false" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          # 2. 格式化數據並存入臨時文件 (轉化為「整行點擊複製」格式)
+          echo "$RAW_CONTENT" | sed '/^$/d' | sed 's/.*/&:443#常用 | &/' > "$TMP_NEW"
+
+          # 3. 對比邏輯 (排除首尾廣告/時間行)
           should_write=false
           if [ -f "$TARGET_FILE" ]; then
+            # 提取舊文件中的核心內容（去頭去尾）
             sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+            # 對比純數據內容是否有變化
             if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
               should_write=true
             fi
@@ -43,7 +54,7 @@ jobs:
             should_write=true
           fi
 
-          # 3. 寫入文件 (標準頭部供 index.html 提取時間)
+          # 4. 寫入文件 (標準頭部供 index.html 提取時間)
           if [ "$should_write" = true ]; then
             echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
@@ -63,5 +74,5 @@ jobs:
             git pull --rebase origin main
             git push origin main
           else
-            echo "數據內容無變動，跳過提交。"
+            echo "數據內容無變動或抓取異常，跳過提交。"
           fi
