@@ -1,0 +1,92 @@
+name: domain-ip-update
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 每 4 小時執行一次 (00:00, 04:00, 08:00...)
+    - cron: '0 */4 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      # 確保 Node 環境穩定
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Fetch and Process Data
+        run: |
+          # 創建目標文件夾 domain
+          mkdir -p domain
+          
+          # 設定北京時間
+          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          TARGET_FILE="domain/ipv4.txt"
+          TMP_NEW="new_processed.tmp"
+          TMP_OLD="old_processed.tmp"
+          HAS_CHANGES=false
+
+          # 1. 抓取原始數據 (svip-s 的 Raw 連結)
+          RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/svip-s/cloudflare_ip/main/best_ips.txt")
+
+          # 【安全檢查】檢查抓取內容是否有效
+          if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 30 ]]; then
+            echo "警告：數據源抓取異常，跳過本次更新。"
+            exit 0
+          fi
+
+          # 2. 數據清洗與重組 (方案 B)
+          # 提取 IPv4 格式行，並轉化為「原始行 | IP:端口」
+          echo "$RAW_DATA" | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" | while read -r line; do
+            # 清理換行符並提取核心 IP:Port
+            clean_line=$(echo "$line" | tr -d '\r')
+            ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+            
+            if [[ -n "$ip_port" ]]; then
+              echo "$clean_line | $ip_port" >> "$TMP_NEW"
+            fi
+          done
+
+          # 3. 內容對比 (排除首尾動態時間行)
+          should_write=false
+          if [ -s "$TMP_NEW" ]; then
+            if [ -f "$TARGET_FILE" ]; then
+              # 去掉舊文件的第一行與最後一行進行純數據對比
+              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+                should_write=true
+              fi
+            else
+              should_write=true
+            fi
+          fi
+
+          # 4. 寫入文件 (自定義封裝)
+          if [ "$should_write" = true ]; then
+            echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            cat "$TMP_NEW" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝svip-s" >> "$TARGET_FILE"
+            HAS_CHANGES=true
+          fi
+
+          echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
+
+      - name: Commit and Push
+        run: |
+          if [ "${{ env.has_changes }}" = "true" ]; then
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add domain/ipv4.txt
+            git commit -m "Domain IP Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git pull --rebase origin main
+            git push origin main
+          else
+            echo "數據無變動，無需提交。"
+          fi
