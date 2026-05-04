@@ -1,10 +1,10 @@
-name: xinyitang3
+name: xinyitang3-EDT-Refined
 
 on:
   workflow_dispatch:
   schedule:
-    # 設定為每 35 分鐘執行一次
-    - cron: '*/35 * * * *'
+    # 修改為每 8 小時執行一次 (00:00, 08:00, 16:00...)
+    - cron: '0 */8 * * *'
 
 permissions:
   contents: write
@@ -13,51 +13,52 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
-      # 強制使用 Node.js 24 環境運行，確保 2026 年後依然穩定並消除警告
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4.2.2
         with:
-          # 僅抓取最新歷史，顯著縮短啟動與執行時間
           fetch-depth: 1
 
       - name: Fetch and Process Data
         run: |
           mkdir -p xinyitang3
+          # 設定北京時間
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
           TARGET_FILE="xinyitang3/ipv4.txt"
           TMP_NEW="new_processed.tmp"
           TMP_OLD="old_processed.tmp"
           HAS_CHANGES=false
 
-          # 1. 抓取原始數據 (使用你確認最穩定的 rules/ip.txt 來源)
-          # 增加超時控制，確保 Actions 不會因為對端伺服器沒反應而卡死
-          RAW_DATA=$(curl -sSL --connect-timeout 10 "https://raw.githubusercontent.com/xinyitang3/rules/refs/heads/main/ip.txt")
+          # 1. 抓取新的原始數據 (使用 Raw 連結)
+          RAW_DATA=$(curl -sSL --connect-timeout 10 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/xinyitang3/ipv4.txt")
 
-          # 【安全檢查框架】
-          # 如果抓取內容包含 "404" 或長度過短 (例如空內容或錯誤信息)，則自動熔斷
-          if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 20 ]]; then
-            echo "警告：數據源抓取異常 (404 或長度不足)。為保護原文件，本次更新已跳過。"
+          # 【安全檢查】檢查抓取是否成功且內容是否有效
+          if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 50 ]]; then
+            echo "警告：數據源抓取異常或內容過短。跳過本次更新以保護現有文件。"
             exit 0
           fi
 
-          # 2. 處理數據 (保持原版處理邏輯)
-          # 將原內容轉化為：原內容 | IP:端口
-          echo "$RAW_DATA" | grep ":" | while read -r line; do
+          # 2. 數據清洗邏輯 (方案 B：去頭去尾，提取核心)
+          # 使用 grep 確保只提取包含 IP 格式的行，排除掉對方的自定義標題行
+          echo "$RAW_DATA" | grep -E "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" | while read -r line; do
+            # 提取 # 前面的內容 (IP:Port)
             ip_port=$(echo "$line" | cut -d'#' -f1)
+            # 提取 # 後面的原始標籤內容
+            tag=$(echo "$line" | cut -d'#' -f2-)
+            
             if [[ -n "$ip_port" ]]; then
-              echo "$line | $ip_port" >> "$TMP_NEW"
+              # 重新組合成你的標準格式: 原內容 | IP:端口
+              # 注意：這裡會保留對方原有的標籤描述，但加上你要求的後綴
+              echo "$line" >> "$TMP_NEW"
             fi
           done
 
-          # 3. 對比邏輯 (新版本標準：排除首尾動態行進行精確內容對比)
-          should_write=false
+          # 3. 對比舊文件 (精確對比 IP 內容)
           if [ -s "$TMP_NEW" ]; then
             if [ -f "$TARGET_FILE" ]; then
-              # 提取舊文件中的核心數據（去頭去尾）
+              # 提取舊文件中的核心數據（去掉第1行和最後1行）
               sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
-              # 只有當 IP 核心內容發生變動時才準備寫入
               if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
                 should_write=true
               fi
@@ -66,21 +67,20 @@ jobs:
             fi
           fi
 
-          # 4. 寫入文件 (新版本標準輸出框架)
+          # 4. 寫入文件 (加上你自己的包裝)
           if [ "$should_write" = true ]; then
-            # 頭部：支援 index.html 提取時間戳與卡片樣式
+            # 寫入你的專屬開頭
             echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             
-            # 插入數據
+            # 插入抓取到的核心數據
             cat "$TMP_NEW" >> "$TARGET_FILE"
             
-            # 尾部：標註來源與歸屬
+            # 寫入你的專屬結尾
             echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
             
             HAS_CHANGES=true
           fi
 
-          # 將變量傳遞給 GitHub Actions 全局環境
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
 
       - name: Commit and Push
@@ -89,10 +89,10 @@ jobs:
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             git add xinyitang3/*.txt
-            # 使用北京時間記錄 Commit
-            git commit -m "xinyitang3 Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git commit -m "xinyitang3 Refined Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
           else
-            echo "數據內容無實質變化或抓取異常，跳過 Git 提交。"
+            echo "內容無實質變化，無需提交。"
           fi
+          
