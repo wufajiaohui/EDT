@@ -20,20 +20,21 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Process and Write Unconditionally
+      - name: Process and Write Strictly Ordered
         run: |
           mkdir -p tiancheng
-          # 加上秒數，確保每次生成的標題行都不一樣，觸發 Git 變更
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M:%S")
           TARGET_FILE="tiancheng/all.txt"
-          TMP_NEW="new_nodes.tmp"
           HAS_CHANGES=false
+          
+          # 清理潛在的舊暫存檔
+          rm -f tmp_*.txt
 
-          # 1. 抓取數據 (保留安全檢查，防範源端 404 覆蓋數據)
+          # 1. 抓取數據
           RAW_BASE64=$(curl -sSL --connect-timeout 10 "https://cm.soso.edu.kg/sub?host=123&uuid=456")
 
           if [[ "$RAW_BASE64" == *"404"* ]] || [[ ${#RAW_BASE64} -lt 20 ]]; then
-            echo "警告：數據源抓取異常，跳過本次處理以保護原始數據。"
+            echo "警告：數據源抓取異常，跳過本次處理。"
             exit 0
           fi
 
@@ -44,33 +45,47 @@ jobs:
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               
-              # 改進的提取邏輯：匹配 @ 之後，直到 ? 或 # 結束
+              # 提取 IP:Port
               hp=$(echo "$line" | grep -oP '(?<=@)[^?#]+' | head -n1)
               
-              if [[ -n "$hp" ]]; then
+              # 【關鍵更新 1】過濾：只允許 443 端口
+              if [[ -n "$hp" && "$hp" == *:443 ]]; then
                 name_part=$(echo "$line" | cut -d'#' -f2)
                 
-                # 地區識別邏輯
-                if [[ "$name_part" =~ "HK" || "$name_part" =~ "香港" ]]; then loc="香港 HK"
-                elif [[ "$name_part" =~ "SG" || "$name_part" =~ "新加坡" ]]; then loc="新加坡 SG"
-                elif [[ "$name_part" =~ "JP" || "$name_part" =~ "日本" ]]; then loc="日本 JP"
-                elif [[ "$name_part" =~ "US" || "$name_part" =~ "美國" ]]; then loc="美國 US"
-                elif [[ "$name_part" =~ "TW" || "$name_part" =~ "台灣" ]]; then loc="台灣 TW"
-                else loc="其它 OT"; fi
-                
-                echo "${hp}#${loc} | ${hp}" >> "$TMP_NEW"
+                # 【關鍵更新 2】地區識別，並寫入對應的獨立暫存檔
+                if [[ "$name_part" =~ "JP" || "$name_part" =~ "日本" ]]; then 
+                  echo "${hp}#日本 JP | ${hp}" >> tmp_JP.txt
+                elif [[ "$name_part" =~ "SG" || "$name_part" =~ "新加坡" ]]; then 
+                  echo "${hp}#新加坡 SG | ${hp}" >> tmp_SG.txt
+                elif [[ "$name_part" =~ "HK" || "$name_part" =~ "香港" ]]; then 
+                  echo "${hp}#香港 HK | ${hp}" >> tmp_HK.txt
+                elif [[ "$name_part" =~ "US" || "$name_part" =~ "美國" ]]; then 
+                  echo "${hp}#美國 US | ${hp}" >> tmp_US.txt
+                elif [[ "$name_part" =~ "TW" || "$name_part" =~ "台灣" ]]; then 
+                  echo "${hp}#台灣 TW | ${hp}" >> tmp_TW.txt
+                else 
+                  echo "${hp}#其它 OT | ${hp}" >> tmp_OT.txt
+                fi
               fi
             done <<< "$RAW_DATA"
           fi
 
-          # 3. 強制寫入文件 (只要有抓到有效節點，就無腦覆寫)
-          if [ -s "$TMP_NEW" ]; then
+          # 3. 按照嚴格順序合併寫入
+          # 檢查是否有任何暫存檔產生（表示有成功抓到 443 節點）
+          if ls tmp_*.txt 1> /dev/null 2>&1; then
             echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
-            sort -u "$TMP_NEW" >> "$TARGET_FILE"
+            
+            # 【關鍵更新 3】嚴格按照順序：JP, SG, HK, US, TW, OT 讀取並去重寫入
+            for reg in JP SG HK US TW OT; do
+              if [ -s "tmp_${reg}.txt" ]; then
+                sort -u "tmp_${reg}.txt" >> "$TARGET_FILE"
+              fi
+            done
+            
             echo "bestcf.030101.xyz:443#▲ 優選IP | Cloudflare EDT | 感謝天誠" >> "$TARGET_FILE"
             HAS_CHANGES=true
           else
-            echo "警告：解析後沒有獲取到有效節點，跳過寫入。"
+            echo "警告：沒有獲取到有效的 443 端口節點，跳過寫入。"
           fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
@@ -82,9 +97,7 @@ jobs:
             git config --local user.name "github-actions[bot]"
             git add tiancheng/*.txt
             
-            # 加上 || true 防止因極端情況 (內容完全無變動) 導致 Action 執行失敗
             git commit -m "TianCheng Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')" || true
-            
             git pull --rebase origin main
             git push origin main
           else
