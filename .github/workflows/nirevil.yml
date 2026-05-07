@@ -3,7 +3,8 @@ name: nirevil
 on:
   workflow_dispatch:
   schedule:
-    - cron: '5 8 * * *' # 每天北京時間 16:05 自動運行
+    # 每 2 小時執行一次 (00:00, 02:00, 04:00...)
+    - cron: '0 */2 * * *'
 
 permissions:
   contents: write
@@ -12,68 +13,83 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
-      # 強制使用 Node.js 24 運行 Actions，確保長久穩定並減少警告
+      # 確保 Node 環境穩定
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
-          # 僅抓取最新歷史，加速啟動
           fetch-depth: 1
 
       - name: Fetch and Process Data
         run: |
-          mkdir -p nirevil
+          # 創建目標文件夾 domain
+          mkdir -p domain
+          
+          # 設定北京時間
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          TARGET_FILE="domain/ipv4.txt"
+          TMP_NEW="new_processed.tmp"
+          TMP_OLD="old_processed.tmp"
           HAS_CHANGES=false
 
-          process_data() {
-            local type=$1 
-            local url=$2
-            local target_file="nirevil/ipv$type.txt"
-            local tmp_new="new_nodes_$type.tmp"
-            local tmp_old="old_nodes_$type.tmp"
-            
-            # 1. 抓取原始數據到臨時變量進行檢查
-            RAW_JSON=$(curl -sSL --connect-timeout 10 "$url")
+          # 1. 抓取原始數據
+          RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/ycsun0v0/cf-ip-data/main/ip.txt")
 
-            # 【安全檢查】防止 404 或數據源失效覆蓋舊文件
-            if [[ "$RAW_JSON" == *"404"* ]] || [[ ${#RAW_JSON} -lt 50 ]]; then
-              echo "警告：IPv$type 數據源抓取異常，跳過本次處理以保護原始數據。"
-              return
+          # 【安全檢查】檢查抓取內容是否有效
+          if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 30 ]]; then
+            echo "警告：數據源抓取異常，跳過本次更新。"
+            exit 0
+          fi
+
+          # 2. 數據清洗與重組
+          # 提取所有的 IPv4 格式行作為基礎資料
+          echo "$RAW_DATA" | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" > raw_ipv4.tmp
+          
+          # 建立/清空最新資料暫存檔
+          > "$TMP_NEW"
+
+          # 第一步：先抓取 HK (香港) 節點
+          grep -i "HK" raw_ipv4.tmp | while read -r line; do
+            clean_line=$(echo "$line" | tr -d '\r')
+            ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+            if [[ -n "$ip_port" ]]; then
+              echo "$clean_line | $ip_port" >> "$TMP_NEW"
             fi
-            
-            # 2. 使用 jq 處理數據並轉換運營商名稱
-            echo "$RAW_JSON" | jq -r --arg type "$type" '
-              .[] | 
-              (if .line == "CM" then "移動" 
-               elif .line == "CU" then "聯通" 
-               elif .line == "CT" then "電信" 
-               else .line end) as $label |
-               "\(.ip):443#\($label) | \(.colo) | \(.latency)ms | \(.speed)mbps"
-            ' > "$tmp_new"
+          done
 
-            # 3. 對比邏輯 (排除首尾動態行)
-            local should_write=false
-            if [ -f "$target_file" ]; then
-              sed '1d;$d' "$target_file" > "$tmp_old"
-              if ! diff -q "$tmp_old" "$tmp_new" > /dev/null; then
+          # 第二步：再抓取 JP (日本) 節點，接續在 HK 後面
+          grep -i "JP" raw_ipv4.tmp | while read -r line; do
+            clean_line=$(echo "$line" | tr -d '\r')
+            ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+            if [[ -n "$ip_port" ]]; then
+              echo "$clean_line | $ip_port" >> "$TMP_NEW"
+            fi
+          done
+
+          # 3. 內容對比 (若無 HK 或 JP 則 TMP_NEW 為空，跳過寫入)
+          should_write=false
+          if [ -s "$TMP_NEW" ]; then
+            if [ -f "$TARGET_FILE" ]; then
+              # 去掉舊文件的第一行與最後一行進行純數據對比
+              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
                 should_write=true
               fi
             else
               should_write=true
             fi
+          else
+            echo "未發現任何 HK 或 JP 節點，略過對比與寫入。"
+          fi
 
-            # 4. 寫入文件 (標準頭部供網頁提取時間)
-            if [ "$should_write" = true ]; then
-              echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$target_file"
-              cat "$tmp_new" >> "$target_file"
-              echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝NiREvil" >> "$target_file"
-              HAS_CHANGES=true
-            fi
-          }
-
-          process_data "4" "https://raw.githubusercontent.com/NiREvil/vless/refs/heads/main/sub/Cf-ipv4.json"
+          # 4. 寫入文件 (自定義封裝)
+          if [ "$should_write" = true ]; then
+            echo "saas.sin.fan:443#▼ 優選IPv4 (HK/JP) | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            cat "$TMP_NEW" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (HK/JP) | Cloudflare EDT | 感謝ycsun0v0" >> "$TARGET_FILE"
+            HAS_CHANGES=true
+          fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
 
@@ -82,10 +98,11 @@ jobs:
           if [ "${{ env.has_changes }}" = "true" ]; then
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
-            git add nirevil/*.txt
-            git commit -m "NiREvil Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git add domain/ipv4.txt
+            git commit -m "Domain IP Update (HK/JP) $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
           else
-            echo "內容無實質變化或抓取失敗，跳過提交。"
+            echo "數據無變動 (或無 HK/JP 節點)，無需提交。"
           fi
+          
