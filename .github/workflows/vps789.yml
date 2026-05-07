@@ -3,50 +3,73 @@ name: vps789
 on:
   workflow_dispatch:
   schedule:
-    # 每天北京時間 08:18, 14:18, 20:18 執行 (比天誠晚 13 分鐘)
-    - cron: '18 0,6,12 * * *'
+    # 每 2 小時執行一次 (00:00, 02:00, 04:00...)
+    - cron: '0 */2 * * *'
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  update:
     runs-on: ubuntu-latest
     env:
-      # 強制 Actions 運行在 Node.js 24 環境，適配 2026 年 GitHub 新標準
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
-          # 僅抓取最新層級，提升執行效率
           fetch-depth: 1
 
-      - name: Process and Compare
+      - name: Fetch and Process Data
         run: |
+          # 創建目標文件夾 vps789
           mkdir -p vps789
+          
+          # 設定北京時間
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
           TARGET_FILE="vps789/top10.txt"
-          TMP_NEW="top10_new.tmp"
-          TMP_OLD="top10_old.tmp"
+          TMP_NEW="new_processed.tmp"
+          TMP_OLD="old_processed.tmp"
           HAS_CHANGES=false
 
-          # 1. 抓取數據並進行安全預檢
-          RAW_CONTENT=$(curl -sSL --connect-timeout 10 "https://raw.githubusercontent.com/cmliu/WorkerVless2sub/main/addressesapi.txt")
+          # 1. 抓取原始數據 (更換為新的數據源 Raw 連結)
+          RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/q3330576893/cf-ip/main/ip.txt")
 
-          # 【安全檢查】防範 404 或空數據覆蓋原有文件
-          if [[ "$RAW_CONTENT" == *"404"* ]] || [[ ${#RAW_CONTENT} -lt 20 ]]; then
-            echo "警告：cmliu 數據源抓取異常 (404 或長度不足)，跳過本次處理。"
+          # 【安全檢查】檢查抓取內容是否有效
+          if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 30 ]]; then
+            echo "警告：數據源抓取異常，跳過本次更新。"
             exit 0
           fi
 
-          # 2. 處理數據：過濾空行、取前 10 行、格式化為「整行點擊複製」格式
-          echo "$RAW_CONTENT" | sed '/^$/d' | head -n 10 | sed 's/.*/&:443#推薦 | &/' > "$TMP_NEW"
+          # 2. 數據清洗與重組
+          echo "$RAW_DATA" | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" > raw_ipv4.tmp
+          
+          # 建立最新資料暫存檔
+          > "$TMP_NEW"
 
-          # 3. 對比邏輯 (排除首尾動態行)
+          # 第一步：優先抓取 JP (日本) 節點
+          grep -i "JP" raw_ipv4.tmp | while read -r line; do
+            clean_line=$(echo "$line" | tr -d '\r')
+            ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+            if [[ -n "$ip_port" ]]; then
+              echo "$clean_line | $ip_port" >> "$TMP_NEW"
+            fi
+          done
+
+          # 第二步：接著抓取 HK (香港) 節點
+          grep -i "HK" raw_ipv4.tmp | while read -r line; do
+            clean_line=$(echo "$line" | tr -d '\r')
+            ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+            if [[ -n "$ip_port" ]]; then
+              echo "$clean_line | $ip_port" >> "$TMP_NEW"
+            fi
+          done
+
+          # 3. 內容對比 (排除標題行與頁尾行)
           should_write=false
           if [ -s "$TMP_NEW" ]; then
             if [ -f "$TARGET_FILE" ]; then
+              # 去掉舊文件的首尾行進行數據對比
               sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
               if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
                 should_write=true
@@ -54,13 +77,15 @@ jobs:
             else
               should_write=true
             fi
+          else
+            echo "未發現任何 JP 或 HK 節點，略過本次更新。"
           fi
 
-          # 4. 寫入文件 (標準化格式供網頁提取時間)
+          # 4. 寫入文件
           if [ "$should_write" = true ]; then
-            echo "saas.sin.fan:443#▼ 優選網域 TOP10 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            echo "saas.sin.fan:443#▼ 優選IPv4 (JP/HK) | $BJ_TIME | Cloudflare" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
-            echo "bestcf.030101.xyz:443#▲ 優選網域 | Cloudflare EDT | 感謝cmliu" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (JP/HK) | 感謝cmliu" >> "$TARGET_FILE"
             HAS_CHANGES=true
           fi
 
@@ -71,10 +96,10 @@ jobs:
           if [ "${{ env.has_changes }}" = "true" ]; then
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
-            git add vps789/*.txt
-            git commit -m "VPS789 (cmliu) Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git add vps789/top10.txt
+            git commit -m "Update JP/HK IPs $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
           else
-            echo "數據無實質變動或抓取失敗，跳過提交。"
+            echo "無 JP/HK 數據變動，無需提交。"
           fi
