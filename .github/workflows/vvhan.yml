@@ -3,117 +3,98 @@ name: vvhan
 on:
   workflow_dispatch:
   schedule:
-    # 每小時的 07 分自動執行
-    - cron: '7 * * * *'
+    # 每 2 小時執行一次 (00:00, 02:00, 04:00...)
+    - cron: '0 */2 * * *'
 
 permissions:
   contents: write
 
 jobs:
-  fetch-and-save:
+  update:
     runs-on: ubuntu-latest
     env:
-      # 強制 Actions 運行在 Node.js 24 環境，適配最新標準
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
         with:
-          # 僅抓取最新層級，提升執行效率
           fetch-depth: 1
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Dependencies
-        run: pip install requests
-
-      - name: Process API Data
+      - name: Fetch and Process Data
         run: |
-          python << 'EOF'
-          import requests
-          import os
-          from datetime import datetime, timedelta
+          # 創建目標文件夾 vvhan
+          mkdir -p vvhan
+          
+          # 設定北京時間
+          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          TARGET_FILE="vvhan/ipv4.txt"
+          TMP_NEW="new_processed.tmp"
+          TMP_OLD="old_processed.tmp"
+          HAS_CHANGES=false
 
-          # 1. 獲取北京時間
-          bj_time = (datetime.utcnow() + timedelta(hours=8)).strftime('%m-%d %H:%M')
-          url = "https://api.4ce.cn/api/bestCFIP"
-          dir_name = "vvhan"
-          os.makedirs(dir_name, exist_ok=True)
+          # 1. 抓取原始數據 (更換為 wswhaisa 的 Raw 連結)
+          RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/wswhaisa/CFPI/main/china_recom.txt")
 
-          def process_v4(file_name):
-              ip_nodes = []
-              # 移動 -> 聯通 -> 電信 排序
-              order = [("CM", "移動"), ("CU", "聯通"), ("CT", "電信")]
-              
-              try:
-                  # 增加超時控制，防止 Actions 卡死
-                  response = requests.get(url, timeout=15)
-                  if response.status_code != 200:
-                      print(f"API 請求失敗: {response.status_code}")
-                      return
-                      
-                  res_json = response.json()
-                  if not res_json.get("success"):
-                      print("API 返回數據標記為失敗")
-                      return
+          # 【安全檢查】檢查抓取內容是否有效
+          if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 30 ]]; then
+            echo "警告：數據源抓取異常，跳過本次更新。"
+            exit 0
+          fi
 
-                  v4_data = res_json.get("data", {}).get("v4", {})
-                  for key, label in order:
-                      nodes = v4_data.get(key, [])
-                      for node in nodes:
-                          ip = node.get("ip")
-                          colo = node.get("colo", "Unknown")
-                          if ip:
-                              # 符合網頁「整行點擊複製」格式：IP:443#標籤|機房|IP
-                              line = f"{ip}:443#{label}|{colo}|{ip}"
-                              ip_nodes.append(line)
-              except Exception as e:
-                  print(f"發生異常: {e}")
-                  return
-              
-              # 安全檢查：如果沒抓到數據，不覆蓋舊文件
-              if not ip_nodes:
-                  print("未抓取到有效 IP 節點")
-                  return
+          # 2. 數據清洗與重組
+          # 提取所有的 IPv4 格式行作為基礎資料
+          echo "$RAW_DATA" | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" > raw_ipv4.tmp
+          
+          # 建立/清空最新資料暫存檔
+          > "$TMP_NEW"
 
-              file_path = os.path.join(dir_name, file_name)
-              should_write = True
-              
-              # 智能對比：僅在 IP 列表有變動時才寫入
-              if os.path.exists(file_path):
-                  with open(file_path, "r", encoding="utf-8") as f:
-                      old_content = f.readlines()
-                      # 跳過首尾時間行進行核心數據對比
-                      old_ips = [l.strip() for l in old_content[1:-1] if l.strip()]
-                      if old_ips == ip_nodes:
-                          print("內容無變化，跳過更新。")
-                          should_write = False
+          # 定義需要抓取的地區與排列順序 (JP -> SG -> HK -> US)
+          # 使用迴圈依序處理，代碼更簡潔
+          for region in "JP" "SG" "HK" "US"; do
+            grep -i "$region" raw_ipv4.tmp | while read -r line; do
+              clean_line=$(echo "$line" | tr -d '\r')
+              ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+              if [[ -n "$ip_port" ]]; then
+                echo "$clean_line | $ip_port" >> "$TMP_NEW"
+              fi
+            done
+          done
 
-              if should_write:
-                  final_output = [f"saas.sin.fan:443#▼ 優選IPv4 | {bj_time} | Cloudflare EDT"]
-                  final_output.extend(ip_nodes)
-                  final_output.append(f"bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝vvHan")
-                  
-                  with open(file_path, "w", encoding="utf-8") as f:
-                      f.write("\n".join(final_output))
-                  print(f"成功更新 {len(ip_nodes)} 個節點")
+          # 3. 內容對比 (排除標題行與頁尾行)
+          should_write=false
+          if [ -s "$TMP_NEW" ]; then
+            if [ -f "$TARGET_FILE" ]; then
+              # 去掉舊文件的首尾行進行數據對比
+              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
+              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+                should_write=true
+              fi
+            else
+              should_write=true
+            fi
+          else
+            echo "未發現任何 JP/SG/HK/US 節點，略過本次更新。"
+          fi
 
-          process_v4("ipv4.txt")
-          EOF
+          # 4. 寫入文件 (自定義封裝標題與頁尾)
+          if [ "$should_write" = true ]; then
+            echo "saas.sin.fan:443#▼ 優選IPv4 (JP/SG/HK/US) | $BJ_TIME | Cloudflare" > "$TARGET_FILE"
+            cat "$TMP_NEW" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (JP/SG/HK/US) | 感謝wswhaisa" >> "$TARGET_FILE"
+            HAS_CHANGES=true
+          fi
+
+          echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
 
       - name: Commit and Push
         run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          git add vvhan/*.txt
-          # 檢查暫存區是否有實質變動
-          if git diff --staged --quiet; then
-            echo "無實質內容變動，跳過提交。"
-          else
-            git commit -m "vvHan Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+          if [ "${{ env.has_changes }}" = "true" ]; then
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add vvhan/ipv4.txt
+            git commit -m "Update JP/SG/HK/US IPs $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
+          else
+            echo "無 JP/SG/HK/US 數據變動，無需提交。"
           fi
