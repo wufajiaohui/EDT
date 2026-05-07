@@ -13,76 +13,64 @@ jobs:
   update:
     runs-on: ubuntu-latest
     env:
-      # 強制使用 Node.js 24 運行 Actions，確保長久穩定
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          # 僅抓取最新歷史，加速啟動
           fetch-depth: 1
 
-      - name: Process and Compare
+      - name: Process and Write Unconditionally
         run: |
           mkdir -p tiancheng
-          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          # 加上秒數，確保每次生成的標題行都不一樣，觸發 Git 變更
+          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M:%S")
           TARGET_FILE="tiancheng/all.txt"
           TMP_NEW="new_nodes.tmp"
-          TMP_OLD="old_nodes.tmp"
           HAS_CHANGES=false
 
-          # 1. 抓取數據並初步檢查 (增加超時控制)
+          # 1. 抓取數據 (保留安全檢查，防範源端 404 覆蓋數據)
           RAW_BASE64=$(curl -sSL --connect-timeout 10 "https://cm.soso.edu.kg/sub?host=123&uuid=456")
 
-          # 【安全檢查】防範 404 或失效源覆蓋原有文件
           if [[ "$RAW_BASE64" == *"404"* ]] || [[ ${#RAW_BASE64} -lt 20 ]]; then
             echo "警告：數據源抓取異常，跳過本次處理以保護原始數據。"
             exit 0
           fi
 
           # 2. 解碼並解析格式化
-          RAW_DATA=$(echo "$RAW_BASE64" | base64 -d 2>/dev/null)
+          RAW_DATA=$(echo "$RAW_BASE64" | tr -d ' \n\r' | base64 -d 2>/dev/null)
           
           if [ -n "$RAW_DATA" ]; then
-            echo "$RAW_DATA" | while IFS= read -r line; do
-              if [[ -z "$line" ]]; then continue; fi
+            while IFS= read -r line; do
+              [[ -z "$line" ]] && continue
               
-              # 提取 host:port (適配 vless/vmess 等節點格式)
-              hp=$(echo "$line" | grep -oP '(?<=@).*?(?=\?)' || echo "")
+              # 改進的提取邏輯：匹配 @ 之後，直到 ? 或 # 結束
+              hp=$(echo "$line" | grep -oP '(?<=@)[^?#]+' | head -n1)
               
               if [[ -n "$hp" ]]; then
+                name_part=$(echo "$line" | cut -d'#' -f2)
+                
                 # 地區識別邏輯
-                if [[ "$line" =~ "HK" ]]; then loc="香港 HK"
-                elif [[ "$line" =~ "SG" ]]; then loc="新加坡 SG"
-                elif [[ "$line" =~ "JP" ]]; then loc="日本 JP"
-                elif [[ "$line" =~ "US" ]]; then loc="美國 US"
+                if [[ "$name_part" =~ "HK" || "$name_part" =~ "香港" ]]; then loc="香港 HK"
+                elif [[ "$name_part" =~ "SG" || "$name_part" =~ "新加坡" ]]; then loc="新加坡 SG"
+                elif [[ "$name_part" =~ "JP" || "$name_part" =~ "日本" ]]; then loc="日本 JP"
+                elif [[ "$name_part" =~ "US" || "$name_part" =~ "美國" ]]; then loc="美國 US"
+                elif [[ "$name_part" =~ "TW" || "$name_part" =~ "台灣" ]]; then loc="台灣 TW"
                 else loc="其它 OT"; fi
                 
-                # 輸出為標準「整行點擊複製」格式
                 echo "${hp}#${loc} | ${hp}" >> "$TMP_NEW"
               fi
-            done
+            done <<< "$RAW_DATA"
           fi
 
-          # 3. 對比邏輯 (排除首尾動態行)
-          should_write=false
+          # 3. 強制寫入文件 (只要有抓到有效節點，就無腦覆寫)
           if [ -s "$TMP_NEW" ]; then
-            if [ -f "$TARGET_FILE" ]; then
-              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
-              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
-                should_write=true
-              fi
-            else
-              should_write=true
-            fi
-          fi
-
-          # 4. 寫入文件 (標準化格式)
-          if [ "$should_write" = true ]; then
             echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
-            cat "$TMP_NEW" >> "$TARGET_FILE"
+            sort -u "$TMP_NEW" >> "$TARGET_FILE"
             echo "bestcf.030101.xyz:443#▲ 優選IP | Cloudflare EDT | 感謝天誠" >> "$TARGET_FILE"
             HAS_CHANGES=true
+          else
+            echo "警告：解析後沒有獲取到有效節點，跳過寫入。"
           fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
@@ -93,9 +81,13 @@ jobs:
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             git add tiancheng/*.txt
-            git commit -m "TianCheng Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            
+            # 加上 || true 防止因極端情況 (內容完全無變動) 導致 Action 執行失敗
+            git commit -m "TianCheng Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')" || true
+            
             git pull --rebase origin main
             git push origin main
           else
-            echo "數據無變動或抓取失敗，跳過提交。"
+            echo "抓取失敗或無有效節點數據，跳過提交。"
           fi
+          
