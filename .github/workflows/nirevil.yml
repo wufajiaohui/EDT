@@ -28,7 +28,7 @@ jobs:
           
           # 設定北京時間
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
-          TARGET_FILE="domain/ipv4.txt"
+          TARGET_FILE="nirevil/ipv4.txt"
           TMP_NEW="new_processed.tmp"
           TMP_OLD="old_processed.tmp"
           HAS_CHANGES=false
@@ -98,7 +98,7 @@ jobs:
           if [ "${{ env.has_changes }}" = "true" ]; then
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
-            git add domain/ipv4.txt
+            git add nirevil/ipv4.txt
             git commit -m "Domain IP Update (HK/JP) $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
