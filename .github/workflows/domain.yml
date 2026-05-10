@@ -51,7 +51,7 @@ jobs:
 
           # 3. 處理第二區塊 (Full)：篩選 + 去重 + 排序
           if [[ "$RAW_DATA_FULL" != *"404"* ]] && [[ ${#RAW_DATA_FULL} -ge 30 ]]; then
-            echo "$RAW_DATA_FULL" | grep -iE "#(NL|SG)" | grep -E ":(443|8443|2053)" | while read -r line; do
+            echo "$RAW_DATA_FULL" | grep -iE "#(NL|SG)" | grep -E ":(443|8443)" | while read -r line; do
               clean_line=$(echo "$line" | tr -d '\r')
               ip_port=$(echo "$clean_line" | sed 's/#.*//' | tr -d ' ')
               
