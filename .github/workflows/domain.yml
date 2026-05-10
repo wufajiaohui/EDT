@@ -3,7 +3,6 @@ name: domain-ip-update
 on:
   workflow_dispatch:
   schedule:
-    # 每 4 小時執行一次
     - cron: '0 */4 * * *'
 
 permissions:
@@ -22,69 +21,60 @@ jobs:
 
       - name: Fetch and Process Data
         run: |
-          # 1. 初始化環境
           mkdir -p domain
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
           TARGET_FILE="domain/ipv4.txt"
-          TMP_RAW="raw_total.tmp"
-          TMP_NEW="new_sorted.tmp"
-          TMP_OLD="old_processed.tmp"
+          
+          TMP_PART1="part1.tmp"
+          TMP_PART2="part2.tmp"
+          TMP_FINAL="final_sorted.tmp"
+          TMP_OLD="old.tmp"
           HAS_CHANGES=false
           
-          rm -f "$TMP_RAW" "$TMP_NEW" "$TMP_OLD"
+          rm -f "$TMP_PART1" "$TMP_PART2" "$TMP_FINAL"
 
-          # 2. 抓取原始數據
-          echo "正在抓取遠端數據源..."
+          # 1. 抓取數據
           RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/svip-s/cloudflare_ip/main/best_ips.txt")
           RAW_DATA_FULL=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/svip-s/cloudflare_ip/main/full_ips.txt")
 
           if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 30 ]]; then
-            echo "錯誤：best_ips 抓取異常，終止任務。"
+            echo "錯誤：主要數據源抓取失敗。"
             exit 0
           fi
 
-          # 3. 處理 best_ips.txt (基礎數據)
-          echo "處理 best_ips..."
+          # 2. 處理第一區塊 (Best)：全量 + 排序
           echo "$RAW_DATA" | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" | while read -r line; do
             clean_line=$(echo "$line" | tr -d '\r')
-            # 提取 IP:Port 用於查重
-            ip_port=$(echo "$clean_line" | sed 's/#.*//' | tr -d ' ')
-            if [[ -n "$ip_port" ]]; then
-              # 存儲格式： IP:Port | 原始整行
-              echo "$ip_port | $clean_line" >> "$TMP_RAW"
-            fi
+            [ -n "$clean_line" ] && echo "$clean_line" >> "$TMP_PART1"
           done
+          [ -s "$TMP_PART1" ] && sort -t '#' -k 2 "$TMP_PART1" -o "$TMP_PART1"
 
-          # 4. 處理 full_ips.txt (追加歐洲國家)
+          # 3. 處理第二區塊 (Full)：篩選 + 去重 + 排序
           if [[ "$RAW_DATA_FULL" != *"404"* ]] && [[ ${#RAW_DATA_FULL} -ge 30 ]]; then
-            echo "處理 full_ips 並篩選歐洲節點..."
             echo "$RAW_DATA_FULL" | grep -iE "#(NL|FR|DE|GB|UK)" | grep -E ":(443|8443|2053|2083|2096)" | while read -r line; do
               clean_line=$(echo "$line" | tr -d '\r')
               ip_port=$(echo "$clean_line" | sed 's/#.*//' | tr -d ' ')
+              
               if [[ -n "$ip_port" ]]; then
-                # 簡單查重，避免重複錄入
-                if ! grep -q "^$ip_port |" "$TMP_RAW" 2>/dev/null; then
-                  echo "$ip_port | $clean_line" >> "$TMP_RAW"
+                # 如果這個 IP 已經出現在第一區塊，就不要了
+                if ! grep -q "$ip_port" "$TMP_PART1" 2>/dev/null; then
+                  echo "$clean_line" >> "$TMP_PART2"
                 fi
               fi
             done
+            [ -s "$TMP_PART2" ] && sort -t '#' -k 2 "$TMP_PART2" -o "$TMP_PART2"
           fi
 
-          # 5. 【核心邏輯】按國家代碼排序並格式化輸出
-          # 說明：我們提取原始行並按 '#' 後的國家縮寫 (如 HK, DE) 排序
-          if [ -s "$TMP_RAW" ]; then
-            # 先用 awk 提取原始行內容，然後 sort 排序，最後只保留你需要的格式
-            # 排序依據是 # 號後的第 1-2 個字符
-            cat "$TMP_RAW" | cut -d'|' -f2- | sed 's/^[[:space:]]*//' | sort -t '#' -k 2 > "$TMP_NEW"
-          fi
+          # 4. 按權重合併：最優在前，補充在後
+          cat "$TMP_PART1" > "$TMP_FINAL"
+          [ -f "$TMP_PART2" ] && cat "$TMP_PART2" >> "$TMP_FINAL"
 
-          # 6. 內容對比
+          # 5. 寫入與提交
           should_write=false
-          if [ -s "$TMP_NEW" ]; then
+          if [ -s "$TMP_FINAL" ]; then
             if [ -f "$TARGET_FILE" ]; then
-              # 移除舊文件的首尾標籤行後對比純數據
               sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
-              if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
+              if ! diff -q "$TMP_OLD" "$TMP_FINAL" > /dev/null; then
                 should_write=true
               fi
             else
@@ -92,15 +82,11 @@ jobs:
             fi
           fi
 
-          # 7. 寫入文件
           if [ "$should_write" = true ]; then
-            echo "檢測到更新，正在寫入文件..."
             echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
-            cat "$TMP_NEW" >> "$TARGET_FILE"
+            cat "$TMP_FINAL" >> "$TARGET_FILE"
             echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝svip-s" >> "$TARGET_FILE"
             HAS_CHANGES=true
-          else
-            echo "無新變動，跳過寫入。"
           fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
