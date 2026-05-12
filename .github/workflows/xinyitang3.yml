@@ -3,7 +3,6 @@ name: xinyitang3-EDT-Refined
 on:
   workflow_dispatch:
   schedule:
-    # 修改為每 8 小時執行一次 (00:00, 08:00, 16:00...)
     - cron: '0 */8 * * *'
 
 permissions:
@@ -23,41 +22,38 @@ jobs:
       - name: Fetch and Process Data
         run: |
           mkdir -p xinyitang3
-          # 設定北京時間
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
           TARGET_FILE="xinyitang3/ipv4.txt"
           TMP_NEW="new_processed.tmp"
           TMP_OLD="old_processed.tmp"
           HAS_CHANGES=false
 
-          # 1. 抓取新的原始數據 (使用 Raw 連結)
+          # 1. 抓取原始數據
           RAW_DATA=$(curl -sSL --connect-timeout 10 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/xinyitang3/ipv4.txt")
 
-          # 【安全檢查】檢查抓取是否成功且內容是否有效
           if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 50 ]]; then
-            echo "警告：數據源抓取異常或內容過短。跳過本次更新以保護現有文件。"
+            echo "警告：數據源抓取異常。跳過本次更新。"
             exit 0
           fi
 
-          # 2. 數據清洗邏輯 (方案 B：去頭去尾，提取核心)
-          # 使用 grep 確保只提取包含 IP 格式的行，排除掉對方的自定義標題行
+          # 2. 數據清洗與重組：添加標準文本「域名 端口號 #地區」
           echo "$RAW_DATA" | grep -E "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" | while read -r line; do
-            # 提取 # 前面的內容 (IP:Port)
+            # 提取 IP 和 端口
             ip_port=$(echo "$line" | cut -d'#' -f1)
-            # 提取 # 後面的原始標籤內容
-            tag=$(echo "$line" | cut -d'#' -f2-)
+            # 提取原始地區標籤
+            region=$(echo "$line" | cut -d'#' -f2-)
             
             if [[ -n "$ip_port" ]]; then
-              # 重新組合成你的標準格式: 原內容 | IP:端口
-              # 注意：這裡會保留對方原有的標籤描述，但加上你要求的後綴
-              echo "$line" >> "$TMP_NEW"
+              # 格式化為：域名 端口號 #地區
+              # 這裡將 IP:Port 拆分為空格分隔，並保留原始地區描述
+              formatted_line=$(echo "$ip_port" | sed 's/:/ /')
+              echo "$formatted_line #$region" >> "$TMP_NEW"
             fi
           done
 
-          # 3. 對比舊文件 (精確對比 IP 內容)
+          # 3. 對比舊文件
           if [ -s "$TMP_NEW" ]; then
             if [ -f "$TARGET_FILE" ]; then
-              # 提取舊文件中的核心數據（去掉第1行和最後1行）
               sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD"
               if ! diff -q "$TMP_OLD" "$TMP_NEW" > /dev/null; then
                 should_write=true
@@ -67,17 +63,11 @@ jobs:
             fi
           fi
 
-          # 4. 寫入文件 (加上你自己的包裝)
+          # 4. 寫入文件
           if [ "$should_write" = true ]; then
-            # 寫入你的專屬開頭
-            echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
-            
-            # 插入抓取到的核心數據
+            echo "saas.sin.fan 443 #▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
-            
-            # 寫入你的專屬結尾
-            echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
-            
+            echo "bestcf.030101.xyz 443 #▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
             HAS_CHANGES=true
           fi
 
@@ -95,4 +85,3 @@ jobs:
           else
             echo "內容無實質變化，無需提交。"
           fi
-          
