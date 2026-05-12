@@ -32,23 +32,20 @@ jobs:
           RAW_DATA=$(curl -sSL --connect-timeout 10 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/xinyitang3/ipv4.txt")
 
           if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 50 ]]; then
-            echo "數據抓取失敗，跳過更新。"
+            echo "數據源抓取異常，跳過更新。"
             exit 0
           fi
 
-          # 2. 核心清洗邏輯
+          # 2. 數據清洗：實現 IP:端口#地區 | IP:端口
           echo "$RAW_DATA" | grep -E "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" | while read -r line; do
-            # 獲取 IP:PORT
-            ip_port=$(echo "$line" | cut -d'#' -f1)
-            # 提取地區簡碼 (例如 HK, JP, VN)
-            # 邏輯：取 # 後面的部分，再按 | 分割取第 2 個欄位
+            # 提取 IP:PORT 部分
+            ip_port=$(echo "$line" | cut -d'#' -f1 | xargs)
+            # 提取地區簡碼 (從 # 後面的內容中提取 | | 之間的部分)
             region=$(echo "$line" | cut -d'#' -f2 | cut -d'|' -f2 | xargs)
             
             if [[ -n "$ip_port" && -n "$region" ]]; then
-              # 格式化輸出: 域名 端口 #地區 | IP:端口
-              # 將原本的 IP:Port 轉換為 域名 端口
-              domain_port=$(echo "$ip_port" | sed 's/:/ /')
-              echo "$domain_port #$region | $ip_port" >> "$TMP_NEW"
+              # 嚴格輸出格式: 43.168.16.112:443#HK | 43.168.16.112:443
+              echo "${ip_port}#${region} | ${ip_port}" >> "$TMP_NEW"
             fi
           done
 
@@ -66,9 +63,9 @@ jobs:
 
           # 4. 寫入文件
           if [ "$should_write" = true ]; then
-            echo "saas.sin.fan 443 #▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            echo "saas.sin.fan:443#▼ 優選IPv4 | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
-            echo "bestcf.030101.xyz 443 #▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3" >> "$TARGET_FILE"
             HAS_CHANGES=true
           fi
 
