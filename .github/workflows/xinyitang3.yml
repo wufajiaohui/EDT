@@ -36,16 +36,22 @@ jobs:
             exit 0
           fi
 
-          # 2. 數據清洗：實現 IP:端口#地區 | IP:端口
-          echo "$RAW_DATA" | grep -E "[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}" | while read -r line; do
-            # 提取 IP:PORT 部分
-            ip_port=$(echo "$line" | cut -d'#' -f1 | xargs)
-            # 提取地區簡碼 (從 # 後面的內容中提取 | | 之間的部分)
-            region=$(echo "$line" | cut -d'#' -f2 | cut -d'|' -f2 | xargs)
-            
-            if [[ -n "$ip_port" && -n "$region" ]]; then
-              # 嚴格輸出格式: 43.168.16.112:443#HK | 43.168.16.112:443
-              echo "${ip_port}#${region} | ${ip_port}" >> "$TMP_NEW"
+          # 2. 數據清洗：精準匹配並提取 IP:PORT 和 兩位大寫字母地區碼
+          echo "$RAW_DATA" | while read -r line; do
+            # 檢查是否包含 IP 格式
+            if [[ "$line" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]]; then
+              # 提取 IP:PORT (取第一个 #号之前的所有非空格字符)
+              ip_port=$(echo "$line" | cut -d'#' -f1 | xargs)
+              
+              # 利用正則表達式提取最後面的兩位大寫英文字母 (例如 JP, KR, TW, SG, HK, US)
+              # grep -oE '[A-Z]{2}' 配合 tail -n 1 可以精準鎖定末尾的地區代碼
+              region=$(echo "$line" | grep -oE '[A-Z]{2}' | tail -n 1)
+
+              # 如果 ip_port 和 region 同時存在，才寫入臨時文件
+              if [[ -n "$ip_port" && -n "$region" ]]; then
+                # 嚴格輸出格式: 43.168.16.112:443#HK | 43.168.16.112:443
+                echo "${ip_port}#${region} | ${ip_port}" >> "$TMP_NEW"
+              fi
             fi
           done
 
