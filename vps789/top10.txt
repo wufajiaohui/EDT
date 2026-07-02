@@ -1,3 +1,4 @@
-saas.sin.fan:443#▼ 優選IPv4 (JP/HK) | 07-03 03:04 | Cloudflare
+saas.sin.fan:443#▼ 優選IPv4 (JP/HK) | 07-03 04:48 | Cloudflare
+45.192.242.10:443#JP | 45.192.242.10:443
 47.76.218.163:443#HK | 47.76.218.163:443
 bestcf.030101.xyz:443#▲ 優選IPv4 (JP/HK) | 感謝cmliu
