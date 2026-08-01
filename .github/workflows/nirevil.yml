@@ -23,8 +23,8 @@ jobs:
 
       - name: Fetch and Process Data
         run: |
-          # 創建目標文件夾 domain
-          mkdir -p domain
+          # 創建目標文件夾 nirevil
+          mkdir -p nirevil
           
           # 設定北京時間
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
@@ -67,7 +67,16 @@ jobs:
             fi
           done
 
-          # 3. 內容對比 (若無 HK 或 JP 則 TMP_NEW 為空，跳過寫入)
+          # 第三步：最後抓取 US (美國) 節點，接續在 JP 後面
+          grep -i "US" raw_ipv4.tmp | while read -r line; do
+            clean_line=$(echo "$line" | tr -d '\r')
+            ip_port=$(echo "$clean_line" | cut -d'#' -f1)
+            if [[ -n "$ip_port" ]]; then
+              echo "$clean_line | $ip_port" >> "$TMP_NEW"
+            fi
+          done
+
+          # 3. 內容對比 (若無 HK/JP/US 則 TMP_NEW 為空，跳過寫入)
           should_write=false
           if [ -s "$TMP_NEW" ]; then
             if [ -f "$TARGET_FILE" ]; then
@@ -80,14 +89,14 @@ jobs:
               should_write=true
             fi
           else
-            echo "未發現任何 HK 或 JP 節點，略過對比與寫入。"
+            echo "未發現任何 HK、JP 或 US 節點，略過對比與寫入。"
           fi
 
           # 4. 寫入文件 (自定義封裝)
           if [ "$should_write" = true ]; then
-            echo "saas.sin.fan:443#▼ 優選IPv4 (HK/JP) | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+            echo "saas.sin.fan:443#▼ 優選IPv4 (HK/JP/US) | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
-            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (HK/JP) | Cloudflare EDT | 感謝ycsun0v0" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (HK/JP/US) | Cloudflare EDT | 感謝ycsun0v0" >> "$TARGET_FILE"
             HAS_CHANGES=true
           fi
 
@@ -99,10 +108,9 @@ jobs:
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             git add nirevil/ipv4.txt
-            git commit -m "Domain IP Update (HK/JP) $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git commit -m "Domain IP Update (HK/JP/US) $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
           else
-            echo "數據無變動 (或無 HK/JP 節點)，無需提交。"
+            echo "數據無變動 (或無 HK/JP/US 節點)，無需提交。"
           fi
-          
