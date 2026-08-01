@@ -32,8 +32,8 @@ jobs:
           TMP_OLD="old_processed.tmp"
           HAS_CHANGES=false
 
-          # 1. 抓取原始數據 (更換為 wswhaisa 的 Raw 連結)
-          RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/wswhaisa/CFPI/main/china_recom.txt")
+          # 1. 抓取原始數據 (更換為 cdngogo 的 Raw 連結)
+          RAW_DATA=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/cdngogo/CFIP/main/full_ips.txt")
 
           # 【安全檢查】檢查抓取內容是否有效
           if [[ "$RAW_DATA" == *"404"* ]] || [[ ${#RAW_DATA} -lt 30 ]]; then
@@ -48,13 +48,14 @@ jobs:
           # 建立/清空最新資料暫存檔
           > "$TMP_NEW"
 
-          # 定義需要抓取的地區與排列順序 (JP -> SG -> HK -> US)
-          # 使用迴圈依序處理，代碼更簡潔
-          for region in "JP" "SG" "HK" "US"; do
+          # 定義需要抓取的地區與嚴格順序 (JP -> SG -> HK -> US -> TW -> KR)
+          for region in "JP" "SG" "HK" "US" "TW" "KR"; do
             grep -i "$region" raw_ipv4.tmp | while read -r line; do
               clean_line=$(echo "$line" | tr -d '\r')
-              ip_port=$(echo "$clean_line" | cut -d'#' -f1)
-              if [[ -n "$ip_port" ]]; then
+              ip_port=$(echo "$clean_line" | cut -d'#' -f1 | tr -d ' ')
+              
+              # 嚴格過濾：只抓取 443 或 8443 端口
+              if [[ "$ip_port" == *:443 || "$ip_port" == *:8443 ]]; then
                 echo "$clean_line | $ip_port" >> "$TMP_NEW"
               fi
             done
@@ -73,14 +74,14 @@ jobs:
               should_write=true
             fi
           else
-            echo "未發現任何 JP/SG/HK/US 節點，略過本次更新。"
+            echo "未發現任何 JP/SG/HK/US/TW/KR (443/8443) 節點，略過本次更新。"
           fi
 
           # 4. 寫入文件 (自定義封裝標題與頁尾)
           if [ "$should_write" = true ]; then
-            echo "saas.sin.fan:443#▼ 優選IPv4 (JP/SG/HK/US) | $BJ_TIME | Cloudflare" > "$TARGET_FILE"
+            echo "saas.sin.fan:443#▼ 優選IPv4 (JP/SG/HK/US/TW/KR) | $BJ_TIME | Cloudflare" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
-            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (JP/SG/HK/US) | 感謝wswhaisa" >> "$TARGET_FILE"
+            echo "bestcf.030101.xyz:443#▲ 優選IPv4 (JP/SG/HK/US/TW/KR) | 感謝cdngogo" >> "$TARGET_FILE"
             HAS_CHANGES=true
           fi
 
@@ -92,9 +93,9 @@ jobs:
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
             git add vvhan/ipv4.txt
-            git commit -m "Update JP/SG/HK/US IPs $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
+            git commit -m "Update JP/SG/HK/US/TW/KR IPs $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
           else
-            echo "無 JP/SG/HK/US 數據變動，無需提交。"
+            echo "無 JP/SG/HK/US/TW/KR 數據變動，無需提交。"
           fi
