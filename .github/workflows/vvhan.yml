@@ -24,75 +24,74 @@ jobs:
         run: |
           mkdir -p vvhan
           
-          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
           TARGET_FILE="vvhan/ipv4.txt"
+          TMP_RAW="raw_data.tmp"
           TMP_NEW="new_processed.tmp"
           TMP_OLD="old_processed.tmp"
-          HAS_CHANGES=false
+          BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M")
+          
+          # 1. 抓取數據 (使用 curl -o 直接存檔，加 User-Agent 防封鎖)
+          echo "=== 1. 開始抓取數據源 ==="
+          curl -sSL -A "Mozilla/5.0" --connect-timeout 15 "https://raw.githubusercontent.com/cdngogo/CFIP/main/full_ips.txt" -o "$TMP_RAW" || true
 
-          # 1. 抓取原始數據 (加入 User-Agent 防止被擋)
-          RAW_DATA=$(curl -sSL -A "Mozilla/5.0" --connect-timeout 15 "https://raw.githubusercontent.com/cdngogo/CFIP/main/full_ips.txt" || true)
-
-          echo "抓取到的數據總字元數: ${#RAW_DATA}"
-
-          # 安全檢查：若長度不足 30 或含 404，直接報錯 Exit 1
-          if [[ "$RAW_DATA" == *"404"* ]] || [ ${#RAW_DATA} -lt 30 ]; then
-            echo "錯誤：未成功獲取數據源內容，跳過處理！"
+          if [ ! -s "$TMP_RAW" ] || grep -q "404: Not Found" "$TMP_RAW"; then
+            echo "::error::數據源抓取失敗或返回內容為空！"
             exit 1
           fi
 
-          # 2. 提取 IPv4 行
-          echo "$RAW_DATA" | grep -E "([0-9]{1,3}\.){3}[0-9]{1,3}" > raw_ipv4.tmp
+          echo "數據源下載成功，大小: $(wc -c < "$TMP_RAW") 位元組"
+
+          # 2. 數據清洗與重組
+          echo "=== 2. 開始解析地區與篩選 443/8443 端口 ==="
           > "$TMP_NEW"
 
-          echo "=== 開始處理地區節點 ==="
-          # 順序：JP -> SG -> HK -> US -> TW -> KR
+          # 嚴格按順序處理：JP -> SG -> HK -> US -> TW -> KR
           for reg in JP SG HK US TW KR; do
             count=0
-            # 精準匹配 # 後面的國家標籤
+            
+            # 精準尋找標籤含有該地區代碼的行 (#.*JP)
             while read -r line; do
               [ -z "$line" ] && continue
               clean_line=$(echo "$line" | tr -d '\r')
               ip_port=$(echo "$clean_line" | cut -d'#' -f1 | tr -d ' ')
               
-              # 嚴格判斷 443 或 8443 端口
-              if [[ "$ip_port" == *:443 || "$ip_port" == *:8443 ]]; then
-                echo "$clean_line | $ip_port" >> "$TMP_NEW"
+              # 正則驗證：必須是標準 IPv4 且端口僅限 443 或 8443
+              if [[ "$ip_port" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}:(443|8443)$ ]]; then
+                echo "${clean_line} | ${ip_port}" >> "$TMP_NEW"
                 count=$((count + 1))
               fi
-            done < <(grep -i "#.*$reg" raw_ipv4.tmp || true)
+            done < <(grep -i "#.*$reg" "$TMP_RAW" || true)
             
-            echo "地區 [$reg] 成功抓取到 $count 個 443/8443 節點"
+            echo "地區 [$reg] -> 匹配到 $count 個符合條件的節點"
           done
 
-          total_found=$(wc -l < "$TMP_NEW")
-          echo "本次共提取到 $total_found 個有效節點"
+          TOTAL_COUNT=$(wc -l < "$TMP_NEW")
+          echo "=== 篩選完成，共取得 $TOTAL_COUNT 個有效節點 ==="
 
-          if [ "$total_found" -eq 0 ]; then
-            echo "錯誤：未找到任何符合條件的 JP/SG/HK/US/TW/KR 節點！"
+          if [ "$TOTAL_COUNT" -eq 0 ]; then
+            echo "::error::未找到任何符合 443/8443 端口的 JP/SG/HK/US/TW/KR 節點！"
             exit 1
           fi
 
-          # 3. 內容比對
-          should_write=false
+          # 3. 比對數據是否有實質變動 (剔除首尾標頭時間戳)
+          HAS_CHANGES=false
           if [ -f "$TARGET_FILE" ]; then
             sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD" 2>/dev/null || true
             if ! diff -q "$TMP_OLD" "$TMP_NEW" >/dev/null 2>&1; then
-              should_write=true
+              HAS_CHANGES=true
             else
-              echo "數據與現有檔案內容完全一致，無需提交。"
+              echo "提示：抓取結果與現有檔案內容完全一致，無需更新。"
             fi
           else
-            should_write=true
+            HAS_CHANGES=true
           fi
 
-          # 4. 寫入檔案
-          if [ "$should_write" = true ]; then
+          # 4. 寫入目標檔案
+          if [ "$HAS_CHANGES" = true ]; then
             echo "saas.sin.fan:443#▼ 優選IPv4 (JP/SG/HK/US/TW/KR) | $BJ_TIME | Cloudflare" > "$TARGET_FILE"
             cat "$TMP_NEW" >> "$TARGET_FILE"
             echo "bestcf.030101.xyz:443#▲ 優選IPv4 (JP/SG/HK/US/TW/KR) | 感謝cdngogo" >> "$TARGET_FILE"
-            HAS_CHANGES=true
-            echo "成功更新 $TARGET_FILE 檔案！"
+            echo "成功更新 $TARGET_FILE"
           fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
@@ -106,7 +105,7 @@ jobs:
             git commit -m "Update JP/SG/HK/US/TW/KR IPs $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
-            echo "成功 Commit 並 Push 到倉庫！"
+            echo "成功提交並推送到 GitHub 倉庫！"
           else
-            echo "數據無變動，跳過提交。"
+            echo "無變更，跳過 Git 提交。"
           fi
