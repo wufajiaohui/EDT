@@ -25,78 +25,101 @@ jobs:
           mkdir -p tiancheng
           BJ_TIME=$(date -d "+8 hours" "+%m-%d %H:%M:%S")
           TARGET_FILE="tiancheng/all.txt"
+          TMP_FINAL="tmp_final.txt"
+          TMP_OLD="tmp_old.txt"
           HAS_CHANGES=false
           
           # 清理潛在的舊暫存檔
           rm -f tmp_*.txt
 
-          # 1. 抓取數據 (已替換為 wanwushequ 源的 raw 網址)
-          RAW_FETCH=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/tiancheng/all.txt")
+          # 1. 抓取數據 (使用 raw 連結)
+          RAW_FETCH=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/tiancheng/all.txt" || true)
 
-          if [[ "$RAW_FETCH" == *"404"* ]] || [[ ${#RAW_FETCH} -lt 20 ]]; then
+          if [ -z "$RAW_FETCH" ] || [[ "$RAW_FETCH" == *"404"* ]] || [[ ${#RAW_FETCH} -lt 20 ]]; then
             echo "警告：數據源抓取異常，跳過本次處理。"
             exit 0
           fi
 
-          # 2. 自動判斷並解析數據 (支援明文與 Base64)
-          DECODED=$(echo "$RAW_FETCH" | tr -d ' \n\r' | base64 -d 2>/dev/null)
-          if [ -n "$DECODED" ] && [[ "$DECODED" == *":"* ]]; then
-            RAW_DATA="$DECODED"
-          else
+          # 2. 自動判斷 Base64 或明文
+          RAW_DATA=""
+          if echo "$RAW_FETCH" | tr -d ' \n\r' | base64 -d >/dev/null 2>&1; then
+            RAW_DATA=$(echo "$RAW_FETCH" | tr -d ' \n\r' | base64 -d 2>/dev/null || true)
+          fi
+          if [ -z "$RAW_DATA" ] || [[ "$RAW_DATA" != *":"* ]]; then
             RAW_DATA="$RAW_FETCH"
           fi
-          
-          if [ -n "$RAW_DATA" ]; then
-            while IFS= read -r line; do
-              [[ -z "$line" ]] && continue
-              
-              # 過濾掉開頭與結尾的標題行
-              [[ "$line" == *"▼"* || "$line" == *"▲"* ]] && continue
-              
-              # 提取 IP:Port (相容 URL 節點格式與純 IP:Port 格式)
-              if [[ "$line" == *"@"* ]]; then
-                hp=$(echo "$line" | grep -oP '(?<=@)[^?#]+' | head -n1)
-              else
-                hp=$(echo "$line" | cut -d'#' -f1 | tr -d ' ')
-              fi
-              
-              # 【過濾】：只允許 443 端口
-              if [[ -n "$hp" && "$hp" == *:443 ]]; then
-                name_part=$(echo "$line" | cut -d'#' -f2)
-                
-                # 【地區識別】：已刪除寫入標籤中的中文，僅保留英文字母 (如 #JP, #SG 等)
-                if [[ "$name_part" =~ "JP" || "$name_part" =~ "日本" ]]; then 
-                  echo "${hp}#JP | ${hp}" >> tmp_JP.txt
-                elif [[ "$name_part" =~ "SG" || "$name_part" =~ "新加坡" ]]; then 
-                  echo "${hp}#SG | ${hp}" >> tmp_SG.txt
-                elif [[ "$name_part" =~ "HK" || "$name_part" =~ "香港" ]]; then 
-                  echo "${hp}#HK | ${hp}" >> tmp_HK.txt
-                elif [[ "$name_part" =~ "US" || "$name_part" =~ "美國" ]]; then 
-                  echo "${hp}#US | ${hp}" >> tmp_US.txt
-                elif [[ "$name_part" =~ "TW" || "$name_part" =~ "台灣" ]]; then 
-                  echo "${hp}#TW | ${hp}" >> tmp_TW.txt
-                else 
-                  echo "${hp}#OT | ${hp}" >> tmp_OT.txt
-                fi
-              fi
-            done <<< "$RAW_DATA"
-          fi
 
-          # 3. 按照嚴格順序合併寫入
-          if ls tmp_*.txt 1> /dev/null 2>&1; then
-            echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
+          # 3. 解析與清洗資料
+          while IFS= read -r line || [ -n "$line" ]; do
+            line=$(echo "$line" | tr -d '\r')
+            [[ -z "$line" ]] && continue
             
-            # 嚴格按照順序：JP, SG, HK, US, TW, OT 讀取並去重寫入
+            # 過濾標頭與標尾
+            if [[ "$line" == *"▼"* || "$line" == *"▲"* ]]; then
+              continue
+            fi
+            
+            # 提取 IP:Port (相容 URI 節點與純文本 IP:Port)
+            hp=""
+            if [[ "$line" == *"@"* ]]; then
+              hp=$(echo "$line" | sed -n 's/.*@\([^?#]*\).*/\1/p' | head -n1)
+            else
+              hp=$(echo "$line" | cut -d'#' -f1 | tr -d ' ')
+            fi
+
+            # 只保留 443 端口
+            if [[ -n "$hp" && "$hp" == *:443 ]]; then
+              name_part=$(echo "$line" | cut -d'#' -f2-)
+              
+              # 地區識別 (使用球狀匹配，去除標籤中的中文)
+              if [[ "$name_part" == *"JP"* || "$name_part" == *"日本"* ]]; then 
+                echo "${hp}#JP | ${hp}" >> tmp_JP.txt
+              elif [[ "$name_part" == *"SG"* || "$name_part" == *"新加坡"* ]]; then 
+                echo "${hp}#SG | ${hp}" >> tmp_SG.txt
+              elif [[ "$name_part" == *"HK"* || "$name_part" == *"香港"* ]]; then 
+                echo "${hp}#HK | ${hp}" >> tmp_HK.txt
+              elif [[ "$name_part" == *"US"* || "$name_part" == *"美國"* ]]; then 
+                echo "${hp}#US | ${hp}" >> tmp_US.txt
+              elif [[ "$name_part" == *"TW"* || "$name_part" == *"台灣"* ]]; then 
+                echo "${hp}#TW | ${hp}" >> tmp_TW.txt
+              else 
+                echo "${hp}#OT | ${hp}" >> tmp_OT.txt
+              fi
+            fi
+          done <<< "$RAW_DATA"
+
+          # 4. 檢查是否有生成任何暫存檔
+          count=$(ls tmp_*.txt 2>/dev/null | wc -l)
+          if [ "$count" -gt 0 ]; then
+            echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TMP_FINAL"
+            
+            # 嚴格順序：JP, SG, HK, US, TW, OT
             for reg in JP SG HK US TW OT; do
               if [ -s "tmp_${reg}.txt" ]; then
-                sort -u "tmp_${reg}.txt" >> "$TARGET_FILE"
+                sort -u "tmp_${reg}.txt" >> "$TMP_FINAL"
               fi
             done
             
-            echo "bestcf.030101.xyz:443#▲ 優選IP | Cloudflare EDT | 感謝天誠" >> "$TARGET_FILE"
-            HAS_CHANGES=true
+            echo "bestcf.030101.xyz:443#▲ 優選IP | Cloudflare EDT | 感謝天誠" >> "$TMP_FINAL"
+            
+            # 比對是否有實際資料變動 (排除首尾時間戳)
+            if [ -f "$TARGET_FILE" ]; then
+              sed '1d;$d' "$TARGET_FILE" > "$TMP_OLD" 2>/dev/null || true
+              sed '1d;$d' "$TMP_FINAL" > tmp_new_check.txt 2>/dev/null || true
+              if ! diff -q "$TMP_OLD" tmp_new_check.txt >/dev/null 2>&1; then
+                HAS_CHANGES=true
+              else
+                echo "資料內容無實質變動，無需更新檔案。"
+              fi
+            else
+              HAS_CHANGES=true
+            fi
+
+            if [ "$HAS_CHANGES" = true ]; then
+              cp "$TMP_FINAL" "$TARGET_FILE"
+            fi
           else
-            echo "警告：沒有獲取到有效的 443 端口節點，跳過寫入。"
+            echo "警告：未獲取到有效的 443 端口節點，跳過寫入。"
           fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
@@ -106,11 +129,11 @@ jobs:
           if [ "${{ env.has_changes }}" = "true" ]; then
             git config --local user.email "github-actions[bot]@users.noreply.github.com"
             git config --local user.name "github-actions[bot]"
-            git add tiancheng/*.txt
+            git add tiancheng/all.txt
             
-            git commit -m "TianCheng Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')" || true
+            git commit -m "TianCheng Update $(date -d "+8 hours" '+%Y-%m-%d %H:%M:%S')"
             git pull --rebase origin main
             git push origin main
           else
-            echo "抓取失敗或無有效節點數據，跳過提交。"
+            echo "無變更或未獲取到有效數據，跳過提交。"
           fi
