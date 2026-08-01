@@ -32,7 +32,7 @@ jobs:
           # 清理潛在的舊暫存檔
           rm -f tmp_*.txt
 
-          # 1. 抓取數據 (使用 raw 連結)
+          # 1. 抓取數據
           RAW_FETCH=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/tiancheng/all.txt" || true)
 
           if [ -z "$RAW_FETCH" ] || [[ "$RAW_FETCH" == *"404"* ]] || [[ ${#RAW_FETCH} -lt 20 ]]; then
@@ -54,12 +54,12 @@ jobs:
             line=$(echo "$line" | tr -d '\r')
             [[ -z "$line" ]] && continue
             
-            # 過濾標頭與標尾
-            if [[ "$line" == *"▼"* || "$line" == *"▲"* ]]; then
+            # 剔除頭尾標籤與廣告宣傳行
+            if [[ "$line" == *"▼"* || "$line" == *"▲"* || "$line" == *"全量版"* || "$line" == *"BestCF"* || "$line" == *"免费"* ]]; then
               continue
             fi
             
-            # 提取 IP:Port (相容 URI 節點與純文本 IP:Port)
+            # 提取 IP:Port
             hp=""
             if [[ "$line" == *"@"* ]]; then
               hp=$(echo "$line" | sed -n 's/.*@\([^?#]*\).*/\1/p' | head -n1)
@@ -67,34 +67,32 @@ jobs:
               hp=$(echo "$line" | cut -d'#' -f1 | tr -d ' ')
             fi
 
-            # 只保留 443 端口
-            if [[ -n "$hp" && "$hp" == *:443 ]]; then
+            # 【關鍵】只允許 443 或 8443 端口
+            if [[ "$hp" == *:443 || "$hp" == *:8443 ]]; then
               name_part=$(echo "$line" | cut -d'#' -f2-)
               
-              # 地區識別 (使用球狀匹配，去除標籤中的中文)
+              # 【關鍵】只分類 JP, SG, HK, US, TW 五個地區，其他地區(如 KR, OT)直接忽略
               if [[ "$name_part" == *"JP"* || "$name_part" == *"日本"* ]]; then 
                 echo "${hp}#JP | ${hp}" >> tmp_JP.txt
-              elif [[ "$name_part" == *"SG"* || "$name_part" == *"新加坡"* ]]; then 
+              elif [[ "$name_part" == *"SG"* || "$name_part" == *"新加坡"* || "$name_part" == *"印加坡"* ]]; then 
                 echo "${hp}#SG | ${hp}" >> tmp_SG.txt
-              elif [[ "$name_part" == *"HK"* || "$name_part" == *"香港"* ]]; then 
+              elif [[ "$name_part" == *"HK"* || "$name_part" == *"香港"* || "$name_part" == *"港岛"* ]]; then 
                 echo "${hp}#HK | ${hp}" >> tmp_HK.txt
-              elif [[ "$name_part" == *"US"* || "$name_part" == *"美國"* ]]; then 
+              elif [[ "$name_part" == *"US"* || "$name_part" == *"美國"* || "$name_part" == *"美国"* || "$name_part" == *"战争贩子"* ]]; then 
                 echo "${hp}#US | ${hp}" >> tmp_US.txt
-              elif [[ "$name_part" == *"TW"* || "$name_part" == *"台灣"* ]]; then 
+              elif [[ "$name_part" == *"TW"* || "$name_part" == *"台灣"* || "$name_part" == *"台湾"* || "$name_part" == *"宝岛"* ]]; then 
                 echo "${hp}#TW | ${hp}" >> tmp_TW.txt
-              else 
-                echo "${hp}#OT | ${hp}" >> tmp_OT.txt
               fi
             fi
           done <<< "$RAW_DATA"
 
-          # 4. 檢查是否有生成任何暫存檔
+          # 4. 檢查是否有生成任何目標地區暫存檔
           count=$(ls tmp_*.txt 2>/dev/null | wc -l)
           if [ "$count" -gt 0 ]; then
             echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TMP_FINAL"
             
-            # 嚴格順序：JP, SG, HK, US, TW, OT
-            for reg in JP SG HK US TW OT; do
+            # 嚴格順序：JP, SG, HK, US, TW
+            for reg in JP SG HK US TW; do
               if [ -s "tmp_${reg}.txt" ]; then
                 sort -u "tmp_${reg}.txt" >> "$TMP_FINAL"
               fi
@@ -119,7 +117,7 @@ jobs:
               cp "$TMP_FINAL" "$TARGET_FILE"
             fi
           else
-            echo "警告：未獲取到有效的 443 端口節點，跳過寫入。"
+            echo "警告：未獲取到有效的 JP/SG/HK/US/TW (443/8443) 節點，跳過寫入。"
           fi
 
           echo "has_changes=$HAS_CHANGES" >> $GITHUB_ENV
