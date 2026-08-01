@@ -30,52 +30,63 @@ jobs:
           # 清理潛在的舊暫存檔
           rm -f tmp_*.txt
 
-          # 1. 抓取數據
-          RAW_BASE64=$(curl -sSL --connect-timeout 10 "https://cm.soso.edu.kg/sub?host=123&uuid=456")
+          # 1. 抓取數據 (已替換為 wanwushequ 源的 raw 網址)
+          RAW_FETCH=$(curl -sSL --connect-timeout 15 "https://raw.githubusercontent.com/wanwushequ/cfyxip/main/tiancheng/all.txt")
 
-          if [[ "$RAW_BASE64" == *"404"* ]] || [[ ${#RAW_BASE64} -lt 20 ]]; then
+          if [[ "$RAW_FETCH" == *"404"* ]] || [[ ${#RAW_FETCH} -lt 20 ]]; then
             echo "警告：數據源抓取異常，跳過本次處理。"
             exit 0
           fi
 
-          # 2. 解碼並解析格式化
-          RAW_DATA=$(echo "$RAW_BASE64" | tr -d ' \n\r' | base64 -d 2>/dev/null)
+          # 2. 自動判斷並解析數據 (支援明文與 Base64)
+          DECODED=$(echo "$RAW_FETCH" | tr -d ' \n\r' | base64 -d 2>/dev/null)
+          if [ -n "$DECODED" ] && [[ "$DECODED" == *":"* ]]; then
+            RAW_DATA="$DECODED"
+          else
+            RAW_DATA="$RAW_FETCH"
+          fi
           
           if [ -n "$RAW_DATA" ]; then
             while IFS= read -r line; do
               [[ -z "$line" ]] && continue
               
-              # 提取 IP:Port
-              hp=$(echo "$line" | grep -oP '(?<=@)[^?#]+' | head -n1)
+              # 過濾掉開頭與結尾的標題行
+              [[ "$line" == *"▼"* || "$line" == *"▲"* ]] && continue
               
-              # 【關鍵更新 1】過濾：只允許 443 端口
+              # 提取 IP:Port (相容 URL 節點格式與純 IP:Port 格式)
+              if [[ "$line" == *"@"* ]]; then
+                hp=$(echo "$line" | grep -oP '(?<=@)[^?#]+' | head -n1)
+              else
+                hp=$(echo "$line" | cut -d'#' -f1 | tr -d ' ')
+              fi
+              
+              # 【過濾】：只允許 443 端口
               if [[ -n "$hp" && "$hp" == *:443 ]]; then
                 name_part=$(echo "$line" | cut -d'#' -f2)
                 
-                # 【關鍵更新 2】地區識別，並寫入對應的獨立暫存檔
+                # 【地區識別】：已刪除寫入標籤中的中文，僅保留英文字母 (如 #JP, #SG 等)
                 if [[ "$name_part" =~ "JP" || "$name_part" =~ "日本" ]]; then 
-                  echo "${hp}#日本 JP | ${hp}" >> tmp_JP.txt
+                  echo "${hp}#JP | ${hp}" >> tmp_JP.txt
                 elif [[ "$name_part" =~ "SG" || "$name_part" =~ "新加坡" ]]; then 
-                  echo "${hp}#新加坡 SG | ${hp}" >> tmp_SG.txt
+                  echo "${hp}#SG | ${hp}" >> tmp_SG.txt
                 elif [[ "$name_part" =~ "HK" || "$name_part" =~ "香港" ]]; then 
-                  echo "${hp}#香港 HK | ${hp}" >> tmp_HK.txt
+                  echo "${hp}#HK | ${hp}" >> tmp_HK.txt
                 elif [[ "$name_part" =~ "US" || "$name_part" =~ "美國" ]]; then 
-                  echo "${hp}#美國 US | ${hp}" >> tmp_US.txt
+                  echo "${hp}#US | ${hp}" >> tmp_US.txt
                 elif [[ "$name_part" =~ "TW" || "$name_part" =~ "台灣" ]]; then 
-                  echo "${hp}#台灣 TW | ${hp}" >> tmp_TW.txt
+                  echo "${hp}#TW | ${hp}" >> tmp_TW.txt
                 else 
-                  echo "${hp}#其它 OT | ${hp}" >> tmp_OT.txt
+                  echo "${hp}#OT | ${hp}" >> tmp_OT.txt
                 fi
               fi
             done <<< "$RAW_DATA"
           fi
 
           # 3. 按照嚴格順序合併寫入
-          # 檢查是否有任何暫存檔產生（表示有成功抓到 443 節點）
           if ls tmp_*.txt 1> /dev/null 2>&1; then
             echo "saas.sin.fan:443#▼ 優選IP | $BJ_TIME | Cloudflare EDT" > "$TARGET_FILE"
             
-            # 【關鍵更新 3】嚴格按照順序：JP, SG, HK, US, TW, OT 讀取並去重寫入
+            # 嚴格按照順序：JP, SG, HK, US, TW, OT 讀取並去重寫入
             for reg in JP SG HK US TW OT; do
               if [ -s "tmp_${reg}.txt" ]; then
                 sort -u "tmp_${reg}.txt" >> "$TARGET_FILE"
@@ -103,4 +114,3 @@ jobs:
           else
             echo "抓取失敗或無有效節點數據，跳過提交。"
           fi
-          
