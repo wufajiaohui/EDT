@@ -1,5 +1,3 @@
-saas.sin.fan:443#▼ 優選IPv4 (HK/JP/US) | 08-13 09:07 | Cloudflare EDT
-191.223.213.47:443#HK | 191.223.213.47:443
-85.121.245.35:443#HK | 85.121.245.35:443
-38.207.164.187:443#HK | 38.207.164.187:443
+saas.sin.fan:443#▼ 優選IPv4 (HK/JP/US) | 08-13 12:00 | Cloudflare EDT
+91.110.209.123:443#HK | 91.110.209.123:443
 bestcf.030101.xyz:443#▲ 優選IPv4 (HK/JP/US) | Cloudflare EDT | 感謝ycsun0v0
