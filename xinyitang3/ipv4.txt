@@ -1,4 +1,4 @@
-saas.sin.fan:443#▼ 優選IPv4 | 11-07 22:37 | Cloudflare EDT
-27.44.142.135:10001#CF | 27.44.142.135:10001
+saas.sin.fan:443#▼ 優選IPv4 | 11-08 03:50 | Cloudflare EDT
+18.162.147.146:443#CF | 18.162.147.146:443
 179.255.103.115:443#CF | 179.255.103.115:443
 bestcf.030101.xyz:443#▲ 優選IPv4 | Cloudflare EDT | 感謝Xinyitang3
